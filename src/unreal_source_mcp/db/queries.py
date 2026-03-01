@@ -61,11 +61,14 @@ def insert_file(
     file_type: str, line_count: int, last_modified: float = 0.0,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO files (path, module_id, file_type, line_count, last_modified) "
+        "INSERT OR IGNORE INTO files (path, module_id, file_type, line_count, last_modified) "
         "VALUES (?, ?, ?, ?, ?)",
         (path, module_id, file_type, line_count, last_modified),
     )
-    return cur.lastrowid
+    if cur.lastrowid and cur.rowcount > 0:
+        return cur.lastrowid
+    row = conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
+    return row[0]
 
 
 def insert_symbol(

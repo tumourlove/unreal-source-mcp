@@ -62,12 +62,14 @@ class ReferenceBuilder:
         return count
 
     def _find_nodes(self, node: Node, type_name: str) -> list[Node]:
-        """Recursively find all descendant nodes of a given type."""
+        """Iteratively find all descendant nodes of a given type."""
         results: list[Node] = []
-        if node.type == type_name:
-            results.append(node)
-        for child in node.children:
-            results.extend(self._find_nodes(child, type_name))
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if current.type == type_name:
+                results.append(current)
+            stack.extend(current.children)
         return results
 
     def _get_function_name(self, func_node: Node) -> str | None:
