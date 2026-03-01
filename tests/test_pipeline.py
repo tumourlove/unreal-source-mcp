@@ -99,13 +99,15 @@ def test_pipeline_records_inheritance(db):
 
     # Re-run with a fresh pipeline that can resolve inheritance
     pipeline2 = IndexingPipeline(db)
-    # Manually populate the name→id map and bases tracking
+    # Manually populate the name→id maps and bases tracking
     pipeline2._symbol_name_to_id["AActor"] = actor_id
+    pipeline2._class_name_to_id["AActor"] = actor_id
 
     # Get ASampleActor ID
     sample = get_symbol_by_name(db, "ASampleActor")
     assert sample is not None
     pipeline2._symbol_name_to_id["ASampleActor"] = sample["id"]
+    pipeline2._class_name_to_id["ASampleActor"] = sample["id"]
     pipeline2._symbol_name_to_id["_bases_ASampleActor"] = ["AActor"]
 
     pipeline2._resolve_inheritance()

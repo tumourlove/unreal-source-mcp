@@ -41,6 +41,7 @@ class IndexingPipeline:
         self._cpp_parser = CppParser()
         self._shader_parser = ShaderParser()
         self._symbol_name_to_id: dict[str, Any] = {}
+        self._class_name_to_id: dict[str, int] = {}  # class/struct only — for inheritance
         conn.commit()
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -52,8 +53,14 @@ class IndexingPipeline:
         path: Path,
         module_name: str | None = None,
         module_type: str = "Runtime",
+        *,
+        finalize: bool = True,
     ) -> dict[str, Any]:
         """Index all C++/shader files under *path*.
+
+        If *finalize* is True (default), resolves inheritance and extracts
+        cross-references after parsing.  Set to False when calling from
+        index_engine, which does a single global finalize at the end.
 
         Returns stats: {files_processed, symbols_extracted, errors}.
         """
@@ -90,23 +97,9 @@ class IndexingPipeline:
                     errors += 1
 
         self._conn.commit()
-        self._resolve_inheritance()
-        self._conn.commit()
 
-        # Second pass: extract cross-references from C++ files
-        ref_builder = ReferenceBuilder(self._conn, self._symbol_name_to_id)
-        for dirpath, _dirnames, filenames in os.walk(path):
-            for fname in filenames:
-                fpath = Path(dirpath) / fname
-                ext = fpath.suffix.lower()
-                if ext in _CPP_EXTENSIONS:
-                    f = get_file_by_path(self._conn, str(fpath))
-                    if f:
-                        try:
-                            ref_builder.extract_references(fpath, f["id"])
-                        except Exception:
-                            logger.warning("Error extracting refs from %s", fpath, exc_info=True)
-        self._conn.commit()
+        if finalize:
+            self._finalize()
 
         return {
             "files_processed": files_processed,
@@ -139,6 +132,7 @@ class IndexingPipeline:
                         sub,
                         module_name=sub.name,
                         module_type=category,
+                        finalize=False,
                     )
                     total_files += stats["files_processed"]
                     total_symbols += stats["symbols_extracted"]
@@ -153,6 +147,7 @@ class IndexingPipeline:
                         source_dir,
                         module_name=source_dir.parent.name,
                         module_type="Plugin",
+                        finalize=False,
                     )
                     total_files += stats["files_processed"]
                     total_symbols += stats["symbols_extracted"]
@@ -164,16 +159,38 @@ class IndexingPipeline:
                 shader_path,
                 module_name="Shaders",
                 module_type="Shaders",
+                finalize=False,
             )
             total_files += stats["files_processed"]
             total_symbols += stats["symbols_extracted"]
             total_errors += stats["errors"]
+
+        # Global finalize — resolve inheritance and references across all modules
+        self._finalize()
 
         return {
             "files_processed": total_files,
             "symbols_extracted": total_symbols,
             "errors": total_errors,
         }
+
+    def _finalize(self) -> None:
+        """Resolve inheritance and extract cross-references globally."""
+        self._resolve_inheritance()
+        self._conn.commit()
+
+        # Extract cross-references from all indexed C++ files
+        ref_builder = ReferenceBuilder(self._conn, self._symbol_name_to_id)
+        rows = self._conn.execute(
+            "SELECT id, path FROM files WHERE file_type IN ('header', 'source', 'inline')"
+        ).fetchall()
+        for row in rows:
+            fpath = Path(row[1])
+            try:
+                ref_builder.extract_references(fpath, row[0])
+            except Exception:
+                logger.warning("Error extracting refs from %s", fpath, exc_info=True)
+        self._conn.commit()
 
     # ── Private helpers ─────────────────────────────────────────────────
 
@@ -242,8 +259,13 @@ class IndexingPipeline:
             self._symbol_name_to_id[sym.name] = sym_id
             if qualified_name != sym.name:
                 self._symbol_name_to_id[qualified_name] = sym_id
-            if sym.kind in ("class", "struct") and sym.base_classes:
-                self._symbol_name_to_id[f"_bases_{sym.name}"] = sym.base_classes
+
+            # Track classes/structs separately for inheritance (first definition wins)
+            if sym.kind in ("class", "struct"):
+                self._class_name_to_id.setdefault(sym.name, sym_id)
+                if sym.base_classes:
+                    # Only store bases if not already set (first definition is canonical)
+                    self._symbol_name_to_id.setdefault(f"_bases_{sym.name}", sym.base_classes)
 
             count += 1
 
@@ -343,16 +365,20 @@ class IndexingPipeline:
             )
 
     def _resolve_inheritance(self) -> None:
-        """Second pass: resolve base class names to symbol IDs and insert inheritance."""
+        """Second pass: resolve base class names to symbol IDs and insert inheritance.
+
+        Uses _class_name_to_id (class/struct only) so that constructors
+        and other symbols with the same name don't shadow class entries.
+        """
         keys_to_process = [k for k in self._symbol_name_to_id if k.startswith("_bases_")]
         for key in keys_to_process:
             child_name = key[len("_bases_"):]
             base_classes = self._symbol_name_to_id[key]
-            child_id = self._symbol_name_to_id.get(child_name)
+            child_id = self._class_name_to_id.get(child_name)
             if child_id is None:
                 continue
             for parent_name in base_classes:
-                parent_id = self._symbol_name_to_id.get(parent_name)
+                parent_id = self._class_name_to_id.get(parent_name)
                 if parent_id is not None:
                     try:
                         insert_inheritance(
