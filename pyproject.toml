@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-unreal-source-mcp = "unreal_source_mcp:main"
+unreal-source-mcp = "unreal_source_mcp.__main__:cli"
 
 [build-system]
 requires = ["hatchling"]
