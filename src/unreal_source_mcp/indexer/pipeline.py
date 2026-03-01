@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from unreal_source_mcp.db.queries import (
+    get_file_by_path,
     insert_file,
     insert_include,
     insert_inheritance,
@@ -16,6 +17,7 @@ from unreal_source_mcp.db.queries import (
     insert_symbol,
 )
 from unreal_source_mcp.indexer.cpp_parser import CppParser
+from unreal_source_mcp.indexer.reference_builder import ReferenceBuilder
 from unreal_source_mcp.indexer.shader_parser import ShaderParser
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,21 @@ class IndexingPipeline:
 
         self._conn.commit()
         self._resolve_inheritance()
+        self._conn.commit()
+
+        # Second pass: extract cross-references from C++ files
+        ref_builder = ReferenceBuilder(self._conn, self._symbol_name_to_id)
+        for dirpath, _dirnames, filenames in os.walk(path):
+            for fname in filenames:
+                fpath = Path(dirpath) / fname
+                ext = fpath.suffix.lower()
+                if ext in _CPP_EXTENSIONS:
+                    f = get_file_by_path(self._conn, str(fpath))
+                    if f:
+                        try:
+                            ref_builder.extract_references(fpath, f["id"])
+                        except Exception:
+                            logger.warning("Error extracting refs from %s", fpath, exc_info=True)
         self._conn.commit()
 
         return {
@@ -221,11 +238,12 @@ class IndexingPipeline:
                 is_ue_macro=1 if sym.is_ue_macro else 0,
             )
 
-            # Track classes/structs for inheritance resolution
-            if sym.kind in ("class", "struct"):
-                self._symbol_name_to_id[sym.name] = sym_id
-                if sym.base_classes:
-                    self._symbol_name_to_id[f"_bases_{sym.name}"] = sym.base_classes
+            # Track all symbols for reference resolution
+            self._symbol_name_to_id[sym.name] = sym_id
+            if qualified_name != sym.name:
+                self._symbol_name_to_id[qualified_name] = sym_id
+            if sym.kind in ("class", "struct") and sym.base_classes:
+                self._symbol_name_to_id[f"_bases_{sym.name}"] = sym.base_classes
 
             count += 1
 
