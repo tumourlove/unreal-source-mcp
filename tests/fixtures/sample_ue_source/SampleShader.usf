@@ -1,0 +1,37 @@
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/DeferredShadingCommon.ush"
+
+// Encode normal for GBuffer storage
+float3 EncodeNormal(float3 Normal)
+{
+    return Normal * 0.5 + 0.5;
+}
+
+struct FGBufferData
+{
+    float3 WorldNormal;
+    float Roughness;
+    float3 BaseColor;
+    float Metallic;
+};
+
+#define GBUFFER_HAS_TANGENT 1
+
+/**
+ * Decode GBuffer normals from the render target.
+ * Uses octahedron encoding for better precision.
+ */
+float3 DecodeGBufferNormal(float2 EncodedNormal)
+{
+    float3 N;
+    N.xy = EncodedNormal * 2.0 - 1.0;
+    N.z = sqrt(saturate(1.0 - dot(N.xy, N.xy)));
+    return N;
+}
+
+void MainPS(
+    in float4 SvPosition : SV_Position,
+    out float4 OutColor : SV_Target0)
+{
+    OutColor = float4(1, 0, 0, 1);
+}
