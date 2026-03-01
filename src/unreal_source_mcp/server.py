@@ -258,6 +258,7 @@ def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
         # Search header and source file types
         source_results = search_source_fts(conn, query, limit=limit, scope="header")
         source_results += search_source_fts(conn, query, limit=limit, scope="source")
+        source_results += search_source_fts(conn, query, limit=limit, scope="inline")
     elif scope == "shaders":
         source_results = search_source_fts(conn, query, limit=limit, scope="shader")
         source_results += search_source_fts(conn, query, limit=limit, scope="shader_header")
