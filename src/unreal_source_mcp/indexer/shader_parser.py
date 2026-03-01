@@ -62,8 +62,8 @@ class ShaderParser:
         path = Path(path)
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            return ParseResult(errors=[f"Could not read {path}: {exc}"])
+        except OSError:
+            return ParseResult(path=str(path))
 
         lines = text.split("\n")
         result = ParseResult(path=str(path))

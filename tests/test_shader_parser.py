@@ -82,3 +82,13 @@ class TestShaderParserDocstrings:
         fn = next(s for s in parsed.symbols if s.name == "EncodeNormal")
         assert fn.docstring is not None
         assert "GBuffer" in fn.docstring
+
+
+class TestShaderParserErrors:
+    def test_unreadable_file_returns_empty_result(self, tmp_path):
+        parser = ShaderParser()
+        fake_path = tmp_path / "nonexistent.usf"
+        result = parser.parse_file(fake_path)
+        assert result.path == str(fake_path)
+        assert result.symbols == []
+        assert result.includes == []
