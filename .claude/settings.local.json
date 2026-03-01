@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(uv run:*)",
-      "Bash(UE_SOURCE_PATH=\"C:/Program Files \\(x86\\)/UE_5.7/Engine/Source\" uv run:*)",
-      "Bash(UE_SOURCE_PATH=\"C:/Program Files \\(x86\\)/UE_5.7/Engine/Source\" UE_SHADER_PATH=\"C:/Program Files \\(x86\\)/UE_5.7/Engine/Shaders\" uv run:*)"
-    ]
-  }
-}

@@ -8,3 +8,5 @@ dist/
 *.db
 .uv/
 uv.lock
+.claude/worktrees/
+.claude/settings.local.json
