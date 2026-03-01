@@ -278,16 +278,25 @@ def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
 
     if source_results:
         parts.append("\n=== Source Line Matches ===")
-        for match in source_results[:limit]:
+        seen: set[tuple[int, object]] = set()
+        shown = 0
+        for match in source_results:
+            if shown >= limit:
+                break
             fid = match["file_id"]
-            filepath = _get_file_path(conn, fid)
             line_num = match.get("line_number", "?")
+            key = (fid, line_num)
+            if key in seen:
+                continue
+            seen.add(key)
+            filepath = _get_file_path(conn, fid)
             text = match.get("text", "").strip()
             # Truncate long text
-            if len(text) > 200:
-                text = text[:200] + "..."
+            if len(text) > 120:
+                text = text[:120] + "..."
             parts.append(f"  {_short_path(filepath)}:{line_num}")
             parts.append(f"    {text}")
+            shown += 1
 
     if not parts:
         return f"No results found for '{query}'."
@@ -297,7 +306,7 @@ def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
 # ── Tool 6: get_class_hierarchy ──────────────────────────────────────────
 
 @mcp.tool()
-def get_class_hierarchy(class_name: str, direction: str = "both", depth: int = 5) -> str:
+def get_class_hierarchy(class_name: str, direction: str = "both", depth: int = 1) -> str:
     """Show the inheritance tree for a class.
 
     direction: 'ancestors' (parents), 'descendants' (children), 'both'
@@ -315,7 +324,7 @@ def get_class_hierarchy(class_name: str, direction: str = "both", depth: int = 5
 
     sym = symbols[0]
     filepath = _get_file_path(conn, sym["file_id"])
-    lines: list[str] = [f"  {sym['name']} ({_short_path(filepath)})"]
+    lines: list[str] = [f"{sym['name']} ({_short_path(filepath)})"]
 
     counter = _Counter()
 
@@ -358,9 +367,8 @@ def _walk_ancestors(
         if counter.shown >= counter.limit:
             counter.truncated += 1
             continue
-        filepath = _get_file_path(conn, p["file_id"])
         prefix = "  " * indent
-        lines.append(f"{prefix}<- {p['name']} ({_short_path(filepath)})")
+        lines.append(f"{prefix}<- {p['name']}")
         counter.shown += 1
         _walk_ancestors(conn, p["id"], lines, indent + 1, max_depth, counter, visited)
 
@@ -383,9 +391,8 @@ def _walk_descendants(
         if counter.shown >= counter.limit:
             counter.truncated += 1
             continue
-        filepath = _get_file_path(conn, c["file_id"])
         prefix = "  " * indent
-        lines.append(f"{prefix}-> {c['name']} ({_short_path(filepath)})")
+        lines.append(f"{prefix}-> {c['name']}")
         counter.shown += 1
         _walk_descendants(conn, c["id"], lines, indent + 1, max_depth, counter, visited)
 
