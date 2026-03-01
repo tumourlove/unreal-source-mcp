@@ -50,6 +50,9 @@ def _run_index(*, reindex: bool = False) -> None:
 
     db_path = get_db_path()
 
+    from unreal_source_mcp.config import _detect_version
+    print(f"Detected UE version: {_detect_version()}", file=sys.stderr)
+
     if reindex and db_path.exists():
         print(f"Removing existing database: {db_path}", file=sys.stderr)
         db_path.unlink()
