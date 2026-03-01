@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -13,25 +12,7 @@ from typing import Optional
 # We try to import from cpp_parser first; if it doesn't exist yet (Task 2
 # running in parallel) we define our own copies.
 # ---------------------------------------------------------------------------
-try:
-    from unreal_source_mcp.indexer.cpp_parser import ParsedSymbol, ParseResult
-except ImportError:
-
-    @dataclass
-    class ParsedSymbol:
-        name: str
-        kind: str  # "function", "class", "struct", "enum", "define", "include"
-        line: int
-        end_line: Optional[int] = None
-        signature: Optional[str] = None
-        docstring: Optional[str] = None
-        children: list["ParsedSymbol"] = field(default_factory=list)
-
-    @dataclass
-    class ParseResult:
-        symbols: list[ParsedSymbol] = field(default_factory=list)
-        includes: list[str] = field(default_factory=list)
-        errors: list[str] = field(default_factory=list)
+from unreal_source_mcp.indexer.cpp_parser import ParsedSymbol, ParseResult
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +66,7 @@ class ShaderParser:
             return ParseResult(errors=[f"Could not read {path}: {exc}"])
 
         lines = text.split("\n")
-        result = ParseResult()
+        result = ParseResult(path=str(path))
 
         self._extract_includes(text, result)
         self._extract_defines(text, lines, result)
@@ -105,7 +86,8 @@ class ShaderParser:
                 ParsedSymbol(
                     name=m.group(1),
                     kind="include",
-                    line=line,
+                    line_start=line,
+                    line_end=line,
                     signature=m.group(0).strip(),
                 )
             )
@@ -122,7 +104,8 @@ class ShaderParser:
                 ParsedSymbol(
                     name=name,
                     kind="define",
-                    line=line,
+                    line_start=line,
+                    line_end=line,
                     signature=f"#define {name} {value}".strip(),
                 )
             )
@@ -140,8 +123,8 @@ class ShaderParser:
                 ParsedSymbol(
                     name=name,
                     kind="struct",
-                    line=start_line,
-                    end_line=end_line,
+                    line_start=start_line,
+                    line_end=end_line,
                     signature=f"struct {name}",
                 )
             )
@@ -192,10 +175,10 @@ class ShaderParser:
                 ParsedSymbol(
                     name=name,
                     kind="function",
-                    line=start_line,
-                    end_line=end_line,
+                    line_start=start_line,
+                    line_end=end_line,
                     signature=signature,
-                    docstring=docstring,
+                    docstring=docstring or "",
                 )
             )
 

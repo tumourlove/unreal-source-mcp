@@ -36,9 +36,9 @@ class TestShaderParserFunctions:
 
     def test_function_line_range(self, parsed):
         fn = next(s for s in parsed.symbols if s.name == "EncodeNormal")
-        assert fn.line is not None
-        assert fn.end_line is not None
-        assert fn.end_line > fn.line
+        assert fn.line_start is not None
+        assert fn.line_end is not None
+        assert fn.line_end > fn.line_start
 
 
 class TestShaderParserStructs:
@@ -48,7 +48,7 @@ class TestShaderParserStructs:
 
     def test_struct_line_range(self, parsed):
         st = next(s for s in parsed.symbols if s.name == "FGBufferData")
-        assert st.end_line > st.line
+        assert st.line_end > st.line_start
 
 
 class TestShaderParserDefines:
