@@ -39,6 +39,9 @@ class IndexingPipeline:
         self._cpp_parser = CppParser()
         self._shader_parser = ShaderParser()
         self._symbol_name_to_id: dict[str, Any] = {}
+        conn.commit()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
 
     # ── Public API ──────────────────────────────────────────────────────
 
@@ -84,7 +87,9 @@ class IndexingPipeline:
                     logger.warning("Error indexing %s", fpath, exc_info=True)
                     errors += 1
 
+        self._conn.commit()
         self._resolve_inheritance()
+        self._conn.commit()
 
         return {
             "files_processed": files_processed,
@@ -318,7 +323,6 @@ class IndexingPipeline:
                 "INSERT INTO source_fts (file_id, line_number, text) VALUES (?, ?, ?)",
                 batch,
             )
-            self._conn.commit()
 
     def _resolve_inheritance(self) -> None:
         """Second pass: resolve base class names to symbol IDs and insert inheritance."""

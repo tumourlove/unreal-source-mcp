@@ -48,7 +48,6 @@ def insert_module(
         "VALUES (?, ?, ?, ?)",
         (name, path, module_type, build_cs_path),
     )
-    conn.commit()
     return cur.lastrowid
 
 
@@ -61,7 +60,6 @@ def insert_file(
         "VALUES (?, ?, ?, ?, ?)",
         (path, module_id, file_type, line_count, last_modified),
     )
-    conn.commit()
     return cur.lastrowid
 
 
@@ -78,7 +76,6 @@ def insert_symbol(
         (name, qualified_name, kind, file_id, line_start, line_end,
          parent_symbol_id, access, signature, docstring, is_ue_macro),
     )
-    conn.commit()
     return cur.lastrowid
 
 
@@ -89,7 +86,6 @@ def insert_inheritance(
         "INSERT INTO inheritance (child_id, parent_id) VALUES (?, ?)",
         (child_id, parent_id),
     )
-    conn.commit()
 
 
 def insert_reference(
@@ -101,7 +97,6 @@ def insert_reference(
         "VALUES (?, ?, ?, ?, ?)",
         (from_symbol_id, to_symbol_id, ref_kind, file_id, line),
     )
-    conn.commit()
 
 
 def insert_include(
@@ -111,7 +106,6 @@ def insert_include(
         "INSERT INTO includes (file_id, included_path, line) VALUES (?, ?, ?)",
         (file_id, included_path, line),
     )
-    conn.commit()
 
 
 # ── Query helpers ────────────────────────────────────────────────────────
