@@ -291,3 +291,12 @@ class TestModuleFileQueries:
         assert stats["file_count"] == 1
         assert stats["symbol_counts"]["class"] == 1
         assert stats["symbol_counts"]["function"] == 1
+
+
+# ─── Duplicate module tests ─────────────────────────────────────────────
+
+class TestDuplicateModule:
+    def test_duplicate_module_returns_existing_id(self, conn):
+        mod_id1 = queries.insert_module(conn, name="TestMod", path="/a", module_type="Runtime")
+        mod_id2 = queries.insert_module(conn, name="TestMod", path="/a", module_type="Runtime")
+        assert mod_id1 == mod_id2

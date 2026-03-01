@@ -44,11 +44,16 @@ def insert_module(
     module_type: str, build_cs_path: str | None = None,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO modules (name, path, module_type, build_cs_path) "
+        "INSERT OR IGNORE INTO modules (name, path, module_type, build_cs_path) "
         "VALUES (?, ?, ?, ?)",
         (name, path, module_type, build_cs_path),
     )
-    return cur.lastrowid
+    if cur.lastrowid and cur.rowcount > 0:
+        return cur.lastrowid
+    row = conn.execute(
+        "SELECT id FROM modules WHERE name = ? AND path = ?", (name, path)
+    ).fetchone()
+    return row[0]
 
 
 def insert_file(
