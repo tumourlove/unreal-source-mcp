@@ -20,6 +20,17 @@ def _detect_version() -> str:
     return "unknown"
 
 
+def _engine_root() -> str:
+    """Return the Engine/ root prefix for path shortening."""
+    if not UE_SOURCE_PATH:
+        return ""
+    # UE_SOURCE_PATH is typically .../Engine/Source — go up to Engine/
+    p = Path(UE_SOURCE_PATH)
+    if p.name == "Source" and p.parent.name == "Engine":
+        return str(p.parent.parent) + os.sep
+    return ""
+
+
 def get_db_path() -> Path:
     """Return the path to the SQLite database, creating the directory if needed."""
     DB_DIR.mkdir(parents=True, exist_ok=True)

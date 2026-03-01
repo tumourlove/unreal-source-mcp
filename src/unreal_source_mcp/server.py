@@ -8,7 +8,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from unreal_source_mcp.config import get_db_path, UE_SOURCE_PATH, UE_SHADER_PATH
+from unreal_source_mcp.config import get_db_path, UE_SOURCE_PATH, UE_SHADER_PATH, _engine_root
 from unreal_source_mcp.db.schema import init_db
 from unreal_source_mcp.db.queries import (
     get_file_by_id,
@@ -33,6 +33,17 @@ mcp = FastMCP(
 )
 
 _conn: sqlite3.Connection | None = None
+_path_prefix: str = ""
+
+
+def _short_path(path: str) -> str:
+    """Shorten absolute UE paths to relative (e.g. Engine/Source/Runtime/...)."""
+    global _path_prefix
+    if not _path_prefix:
+        _path_prefix = _engine_root()
+    if _path_prefix and path.startswith(_path_prefix):
+        return path[len(_path_prefix):].replace("\\", "/")
+    return path
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -127,7 +138,7 @@ def read_source(symbol: str, include_header: bool = True) -> str:
         if not include_header and filepath.endswith(".h"):
             continue
 
-        header = f"--- {filepath} (lines {line_start}-{line_end}) ---"
+        header = f"--- {_short_path(filepath)} (lines {line_start}-{line_end}) ---"
         doc = ""
         if sym.get("docstring"):
             doc = f"// {sym['docstring']}\n"
@@ -166,7 +177,7 @@ def find_references(symbol: str, ref_kind: str = "", limit: int = 50) -> str:
             path = ref.get("path", "<unknown>")
             line = ref.get("line", "?")
             from_name = ref.get("from_name", "<unknown>")
-            lines.append(f"{kind_tag} {path}:{line} (from {from_name})")
+            lines.append(f"{kind_tag} {_short_path(path)}:{line} (from {from_name})")
 
     if not lines:
         return f"No references found for '{symbol}'."
@@ -194,7 +205,7 @@ def find_callers(function: str, limit: int = 50) -> str:
             from_name = ref.get("from_name", "<unknown>")
             path = ref.get("path", "<unknown>")
             line = ref.get("line", "?")
-            lines.append(f"{from_name} \u2014 {path}:{line}")
+            lines.append(f"{from_name} \u2014 {_short_path(path)}:{line}")
 
     if not lines:
         return f"No callers found for '{function}'."
@@ -222,7 +233,7 @@ def find_callees(function: str, limit: int = 50) -> str:
             to_name = ref.get("to_name", "<unknown>")
             path = ref.get("path", "<unknown>")
             line = ref.get("line", "?")
-            lines.append(f"{to_name} \u2014 {path}:{line}")
+            lines.append(f"{to_name} \u2014 {_short_path(path)}:{line}")
 
     if not lines:
         return f"No callees found for '{function}'."
@@ -249,7 +260,7 @@ def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
         for sym in sym_results:
             filepath = _get_file_path(conn, sym["file_id"])
             sig = sym.get("signature") or ""
-            parts.append(f"  [{sym['kind']}] {sym['qualified_name']} ({filepath}:{sym['line_start']})")
+            parts.append(f"  [{sym['kind']}] {sym['qualified_name']} ({_short_path(filepath)}:{sym['line_start']})")
             if sig:
                 parts.append(f"         {sig}")
 
@@ -275,7 +286,7 @@ def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
             # Truncate long text
             if len(text) > 200:
                 text = text[:200] + "..."
-            parts.append(f"  {filepath}:{line_num}")
+            parts.append(f"  {_short_path(filepath)}:{line_num}")
             parts.append(f"    {text}")
 
     if not parts:
@@ -304,22 +315,38 @@ def get_class_hierarchy(class_name: str, direction: str = "both", depth: int = 5
 
     sym = symbols[0]
     filepath = _get_file_path(conn, sym["file_id"])
-    lines: list[str] = [f"{'=' * 40}", f"  {sym['name']} ({filepath})", f"{'=' * 40}"]
+    lines: list[str] = [f"  {sym['name']} ({_short_path(filepath)})"]
+
+    counter = _Counter()
 
     if direction in ("ancestors", "both"):
         lines.append("\nAncestors:")
-        _walk_ancestors(conn, sym["id"], lines, indent=1, max_depth=depth)
+        _walk_ancestors(conn, sym["id"], lines, indent=1, max_depth=depth, counter=counter)
+        if not any("<-" in l for l in lines):
+            lines.append("  (none)")
 
     if direction in ("descendants", "both"):
         lines.append("\nDescendants:")
-        _walk_descendants(conn, sym["id"], lines, indent=1, max_depth=depth)
+        _walk_descendants(conn, sym["id"], lines, indent=1, max_depth=depth, counter=counter)
+        if counter.truncated > 0:
+            lines.append(f"\n  ... and {counter.truncated} more (increase depth to see all)")
 
     return "\n".join(lines)
 
 
+class _Counter:
+    """Track how many entries were truncated."""
+    __slots__ = ("shown", "truncated", "limit")
+    def __init__(self, limit: int = 80):
+        self.shown = 0
+        self.limit = limit
+        self.truncated = 0
+
+
 def _walk_ancestors(
     conn: sqlite3.Connection, sym_id: int, lines: list[str],
-    indent: int, max_depth: int, visited: set[int] | None = None,
+    indent: int, max_depth: int, counter: _Counter,
+    visited: set[int] | None = None,
 ) -> None:
     if visited is None:
         visited = set()
@@ -328,15 +355,20 @@ def _walk_ancestors(
     visited.add(sym_id)
     parents = get_inheritance_parents(conn, sym_id)
     for p in parents:
+        if counter.shown >= counter.limit:
+            counter.truncated += 1
+            continue
         filepath = _get_file_path(conn, p["file_id"])
         prefix = "  " * indent
-        lines.append(f"{prefix}<- {p['name']} ({filepath})")
-        _walk_ancestors(conn, p["id"], lines, indent + 1, max_depth, visited)
+        lines.append(f"{prefix}<- {p['name']} ({_short_path(filepath)})")
+        counter.shown += 1
+        _walk_ancestors(conn, p["id"], lines, indent + 1, max_depth, counter, visited)
 
 
 def _walk_descendants(
     conn: sqlite3.Connection, sym_id: int, lines: list[str],
-    indent: int, max_depth: int, visited: set[int] | None = None,
+    indent: int, max_depth: int, counter: _Counter,
+    visited: set[int] | None = None,
 ) -> None:
     if visited is None:
         visited = set()
@@ -344,11 +376,18 @@ def _walk_descendants(
         return
     visited.add(sym_id)
     children = get_inheritance_children(conn, sym_id)
+    if indent >= max_depth and children:
+        counter.truncated += len(children)
+        return
     for c in children:
+        if counter.shown >= counter.limit:
+            counter.truncated += 1
+            continue
         filepath = _get_file_path(conn, c["file_id"])
         prefix = "  " * indent
-        lines.append(f"{prefix}-> {c['name']} ({filepath})")
-        _walk_descendants(conn, c["id"], lines, indent + 1, max_depth, visited)
+        lines.append(f"{prefix}-> {c['name']} ({_short_path(filepath)})")
+        counter.shown += 1
+        _walk_descendants(conn, c["id"], lines, indent + 1, max_depth, counter, visited)
 
 
 # ── Tool 7: get_module_info ─────────────────────────────────────────────
@@ -365,7 +404,7 @@ def get_module_info(module_name: str) -> str:
     mod = stats["module"]
     lines: list[str] = [
         f"Module: {mod['name']}",
-        f"Path: {mod['path']}",
+        f"Path: {_short_path(mod['path'])}",
         f"Type: {mod['module_type']}",
         f"Files: {stats['file_count']}",
         "",
@@ -417,7 +456,7 @@ def get_symbol_context(symbol: str, context_lines: int = 20) -> str:
             info_parts.append(f"Docstring: {sym['docstring']}")
         if sym.get("signature"):
             info_parts.append(f"Signature: {sym['signature']}")
-        info_parts.append(f"File: {filepath} (lines {line_start}-{line_end})")
+        info_parts.append(f"File: {_short_path(filepath)} (lines {line_start}-{line_end})")
         info = "\n".join(info_parts)
 
         source = _read_file_lines(filepath, ctx_start, ctx_end)
