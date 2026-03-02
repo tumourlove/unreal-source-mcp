@@ -153,6 +153,14 @@ uv run pytest -v
 UE_SOURCE_PATH="/path/to/Engine/Source" uv run python -m unreal_source_mcp
 ```
 
+## Related Servers
+
+- [unreal-project-mcp](https://github.com/tumourlove/unreal-project-mcp) — Project-level source intelligence (your C++ code)
+- [unreal-editor-mcp](https://github.com/tumourlove/unreal-editor-mcp) — Build diagnostics and editor log tools (Live Coding, error parsing, log search)
+- [unreal-api-mcp](https://github.com/nicobailon/unreal-api-mcp) by [Nico Bailon](https://github.com/nicobailon) — API surface lookup (signatures, #include paths, deprecation warnings)
+
+Together these servers give AI agents full-stack UE understanding: engine internals, API surface, your project code, and build/runtime feedback.
+
 ## Requirements
 
 - Python 3.11+
