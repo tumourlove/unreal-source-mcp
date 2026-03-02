@@ -128,3 +128,31 @@ def test_find_callers_no_crash():
 def test_find_callees_no_crash():
     result = server.find_callees("DoSomething")
     assert isinstance(result, str)
+
+
+# ── read_file ────────────────────────────────────────────────────────────
+
+def test_read_file_by_full_path():
+    """read_file should read lines from a file by its full path."""
+    result = server.read_file(str(FIXTURES / "SampleActor.h"))
+    assert "ASampleActor" in result
+    assert "DoSomething" in result
+
+
+def test_read_file_by_suffix():
+    """read_file should resolve partial paths against the DB."""
+    result = server.read_file("SampleActor.h")
+    assert "ASampleActor" in result
+
+
+def test_read_file_line_range():
+    """read_file with start/end should return only those lines."""
+    result = server.read_file(str(FIXTURES / "SampleActor.cpp"), start_line=11, end_line=19)
+    assert "DoSomething" in result
+    assert "InternalHelper" not in result
+
+
+def test_read_file_not_found():
+    """read_file should return a helpful message for unknown paths."""
+    result = server.read_file("NonExistent.h")
+    assert "not found" in result.lower() or "No file" in result

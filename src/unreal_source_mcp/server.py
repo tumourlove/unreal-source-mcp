@@ -12,7 +12,9 @@ from mcp.server.fastmcp import FastMCP
 from unreal_source_mcp.config import get_db_path, UE_SOURCE_PATH, UE_SHADER_PATH, _engine_root
 from unreal_source_mcp.db.schema import init_db
 from unreal_source_mcp.db.queries import (
+    find_file_by_suffix,
     get_file_by_id,
+    get_file_by_path,
     get_inheritance_children,
     get_inheritance_parents,
     get_module_stats,
@@ -564,6 +566,47 @@ def get_symbol_context(symbol: str, context_lines: int = 20) -> str:
         parts.append(f"{header}\n{info}\n\n{source}")
 
     return "\n\n".join(parts) if parts else f"Found symbol '{symbol}' but could not read source."
+
+
+# ── Tool 9: read_file ──────────────────────────────────────────────────
+
+@mcp.tool()
+def read_file(path: str, start_line: int = 1, end_line: int = 0) -> str:
+    """Read source lines from a file by path.
+
+    Supports full paths or partial paths (resolved against indexed files).
+    Default: 200 lines from start_line. Set end_line to limit range.
+    """
+    conn = _get_conn()
+
+    # Resolve the file path
+    resolved_path: str | None = None
+
+    # Try as absolute/full path first
+    p = Path(path)
+    if p.is_file():
+        resolved_path = str(p)
+    else:
+        # Try DB lookup by exact path
+        f = get_file_by_path(conn, path)
+        if f:
+            resolved_path = f["path"]
+        else:
+            # Try suffix match
+            f = find_file_by_suffix(conn, path)
+            if f:
+                resolved_path = f["path"]
+
+    if resolved_path is None:
+        return f"No file found matching '{path}'."
+
+    # Default end_line: 200 lines from start
+    if end_line <= 0:
+        end_line = start_line + 199
+
+    header = f"--- {_short_path(resolved_path)} (lines {start_line}-{end_line}) ---"
+    source = _read_file_lines(resolved_path, start_line, end_line)
+    return f"{header}\n{source}"
 
 
 # ── Entry point ──────────────────────────────────────────────────────────

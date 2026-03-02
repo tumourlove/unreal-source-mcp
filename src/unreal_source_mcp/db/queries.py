@@ -206,6 +206,15 @@ def get_file_by_path(conn: sqlite3.Connection, path: str) -> dict | None:
     return _row_to_dict(row)
 
 
+def find_file_by_suffix(conn: sqlite3.Connection, suffix: str) -> dict | None:
+    """Find a file whose path ends with the given suffix."""
+    row = conn.execute(
+        "SELECT * FROM files WHERE path LIKE ? LIMIT 1",
+        (f"%{suffix}",),
+    ).fetchone()
+    return _row_to_dict(row)
+
+
 def get_module_by_name(conn: sqlite3.Connection, name: str) -> dict | None:
     row = conn.execute("SELECT * FROM modules WHERE name = ?", (name,)).fetchone()
     return _row_to_dict(row)
