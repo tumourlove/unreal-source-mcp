@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -102,6 +103,22 @@ def _get_file_path(conn: sqlite3.Connection, file_id: int) -> str:
     return f["path"] if f else "<unknown>"
 
 
+_FORWARD_DECL_RE = re.compile(r"^\s*(class|struct|enum)\s+\w[\w:]*\s*;")
+
+
+def _is_forward_declaration(path: str, line_start: int, line_end: int) -> bool:
+    """Check if a symbol entry is a single-line forward declaration."""
+    if line_end - line_start > 1:
+        return False
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+        if line_start <= len(lines):
+            return bool(_FORWARD_DECL_RE.match(lines[line_start - 1]))
+    except OSError:
+        pass
+    return False
+
+
 # ── Tool 1: read_source ─────────────────────────────────────────────────
 
 @mcp.tool()
@@ -119,6 +136,20 @@ def read_source(symbol: str, include_header: bool = True) -> str:
         symbols = search_symbols_fts(conn, symbol, limit=5)
     if not symbols:
         return f"No symbol found matching '{symbol}'."
+
+    # Filter out forward declarations when a real definition exists
+    has_definition = any(
+        (sym["line_end"] - sym["line_start"]) > 1
+        for sym in symbols
+    )
+    if has_definition:
+        filtered = []
+        for sym in symbols:
+            filepath = _get_file_path(conn, sym["file_id"])
+            if _is_forward_declaration(filepath, sym["line_start"], sym["line_end"]):
+                continue
+            filtered.append(sym)
+        symbols = filtered if filtered else symbols  # fallback to all if filtering removes everything
 
     parts: list[str] = []
     seen_files: set[tuple[int, int, int]] = set()

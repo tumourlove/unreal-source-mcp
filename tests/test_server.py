@@ -54,6 +54,24 @@ def test_read_source_finds_class():
     assert "ASampleActor" in result
 
 
+def test_read_source_filters_forward_declarations():
+    """read_source should not return forward declarations when full definition exists."""
+    result = server.read_source("FSampleData")
+    # Should contain the real definition (multi-line struct)
+    assert "UPROPERTY" in result or "Value" in result
+    # Should NOT contain the single-line forward declaration
+    lines = result.split("\n")
+    forward_decl_lines = [l for l in lines if l.strip() == "struct FSampleData;"]
+    assert len(forward_decl_lines) == 0, f"Forward declarations should be filtered out, found: {forward_decl_lines}"
+
+
+def test_read_source_keeps_forward_decl_when_no_definition():
+    """If only forward declarations exist (no full definition), keep one."""
+    result = server.read_source("UPhysicsVolume")
+    # UPhysicsVolume only exists as a forward declaration, so it should still appear
+    assert "UPhysicsVolume" in result
+
+
 # ── get_class_hierarchy ──────────────────────────────────────────────────
 
 def test_get_class_hierarchy():
