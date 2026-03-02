@@ -9,10 +9,11 @@ Indexes all UE C++ and HLSL source code into a local SQLite database and exposes
 AI assistants hallucinate engine APIs, guess at implementation patterns, and can't see how Epic actually built things. This server gives them deep structural access to the real engine source — so they write code that matches how UE actually works, not how they imagine it works.
 
 **Complements** (does not replace):
-- [unreal-project-mcp](https://github.com/tumourlove/unreal-project-mcp) — Project-level source intelligence (your game's C++ code)
+- [unreal-project-mcp](https://github.com/tumourlove/unreal-project-mcp) — Project-level source intelligence (your C++ code)
+- [unreal-editor-mcp](https://github.com/tumourlove/unreal-editor-mcp) — Build diagnostics and editor log tools (Live Coding, error parsing, log search)
 - [unreal-api-mcp](https://github.com/nicobailon/unreal-api-mcp) by [Nico Bailon](https://github.com/nicobailon) — API surface lookup (signatures, #include paths, deprecation warnings)
 
-Together these three servers give AI agents full-stack UE understanding: engine internals, API surface, and your project code.
+Together these servers give AI agents full-stack UE understanding: engine internals, API surface, your project code, and build/runtime feedback.
 
 ## Quick Start
 
@@ -152,14 +153,6 @@ uv run pytest -v
 # Run locally
 UE_SOURCE_PATH="/path/to/Engine/Source" uv run python -m unreal_source_mcp
 ```
-
-## Related Servers
-
-- [unreal-project-mcp](https://github.com/tumourlove/unreal-project-mcp) — Project-level source intelligence (your C++ code)
-- [unreal-editor-mcp](https://github.com/tumourlove/unreal-editor-mcp) — Build diagnostics and editor log tools (Live Coding, error parsing, log search)
-- [unreal-api-mcp](https://github.com/nicobailon/unreal-api-mcp) by [Nico Bailon](https://github.com/nicobailon) — API surface lookup (signatures, #include paths, deprecation warnings)
-
-Together these servers give AI agents full-stack UE understanding: engine internals, API surface, your project code, and build/runtime feedback.
 
 ## Requirements
 
