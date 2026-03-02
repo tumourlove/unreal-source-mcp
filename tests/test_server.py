@@ -156,3 +156,23 @@ def test_read_file_not_found():
     """read_file should return a helpful message for unknown paths."""
     result = server.read_file("NonExistent.h")
     assert "not found" in result.lower() or "No file" in result
+
+
+# ── search_source mode parameter ─────────────────────────────────────────
+
+def test_search_source_substring_mode():
+    """search_source with mode='substring' should find exact multi-token patterns."""
+    result = server.search_source("void DoSomething(float DeltaTime)", mode="substring")
+    assert "DoSomething" in result
+
+
+def test_search_source_regex_mode():
+    """search_source with mode='regex' should find regex patterns."""
+    result = server.search_source(r"void\s+\w+\(float", mode="regex")
+    assert "DoSomething" in result or "SampleActor" in result
+
+
+def test_search_source_fts_mode_default():
+    """search_source with default mode should work as before (FTS)."""
+    result = server.search_source("DoSomething")
+    assert "DoSomething" in result

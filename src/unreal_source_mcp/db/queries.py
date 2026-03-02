@@ -196,6 +196,34 @@ def search_source_fts(
     return _rows_to_dicts(rows)
 
 
+def get_source_chunks(
+    conn: sqlite3.Connection, keyword: str, scope: str = "all", limit: int = 500,
+) -> list[dict]:
+    """Fetch source_fts chunks containing a keyword (for post-filtering).
+
+    Uses FTS to narrow candidates, returns raw text for regex/substring matching.
+    """
+    fts_query = _escape_fts(keyword)
+    if scope == "all":
+        rows = conn.execute(
+            "SELECT f.file_id, f.line_number, f.text "
+            "FROM source_fts f "
+            "WHERE source_fts MATCH ? "
+            "LIMIT ?",
+            (fts_query, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT sf.file_id, sf.line_number, sf.text "
+            "FROM source_fts sf "
+            "JOIN files fi ON fi.id = sf.file_id "
+            "WHERE source_fts MATCH ? AND fi.file_type = ? "
+            "LIMIT ?",
+            (fts_query, scope, limit),
+        ).fetchall()
+    return _rows_to_dicts(rows)
+
+
 def get_file_by_id(conn: sqlite3.Connection, file_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
     return _row_to_dict(row)

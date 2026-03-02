@@ -20,6 +20,7 @@ from unreal_source_mcp.db.queries import (
     get_module_stats,
     get_references_from,
     get_references_to,
+    get_source_chunks,
     get_symbols_by_name,
     get_symbols_in_module,
     search_source_fts,
@@ -338,61 +339,132 @@ def find_callees(function: str, limit: int = 50) -> str:
 
 # ── Tool 5: search_source ───────────────────────────────────────────────
 
+def _search_source_pattern(
+    conn: sqlite3.Connection, pattern: str, scope: str, limit: int, mode: str,
+) -> list[str]:
+    """Search source using regex or substring matching."""
+    import re as re_mod
+
+    # Extract a keyword for FTS narrowing
+    words = re_mod.findall(r'[a-zA-Z_]\w{2,}', pattern)
+    if not words:
+        return ["Pattern must contain at least one keyword (3+ chars) for pre-filtering."]
+    keyword = max(words, key=len)
+
+    # Map scope to file_type values for querying
+    scopes: list[str] = []
+    if scope == "cpp":
+        scopes = ["header", "source", "inline"]
+    elif scope == "shaders":
+        scopes = ["shader", "shader_header"]
+    else:
+        scopes = ["all"]
+
+    all_chunks: list[dict] = []
+    for s in scopes:
+        all_chunks.extend(get_source_chunks(conn, keyword, scope=s, limit=500))
+
+    if mode == "regex":
+        try:
+            compiled = re_mod.compile(pattern)
+        except re_mod.error as e:
+            return [f"Invalid regex: {e}"]
+        match_fn = lambda text: compiled.search(text) is not None
+    else:
+        compiled = None
+        match_fn = lambda text: pattern in text
+
+    parts: list[str] = [f"=== Pattern Matches ({mode}) ==="]
+    seen: set[tuple[int, object]] = set()
+    shown = 0
+    for chunk in all_chunks:
+        if shown >= limit:
+            break
+        text = chunk.get("text", "")
+        if not match_fn(text):
+            continue
+        fid = chunk["file_id"]
+        line_num = chunk.get("line_number", "?")
+        key = (fid, line_num)
+        if key in seen:
+            continue
+        seen.add(key)
+        filepath = _get_file_path(conn, fid)
+
+        # Find the specific matching line within the chunk
+        for i, line in enumerate(text.split("\n")):
+            if (mode == "regex" and compiled is not None and compiled.search(line)) or (mode == "substring" and pattern in line):
+                display = line.strip()[:120]
+                actual_line = line_num + i if isinstance(line_num, int) else line_num
+                parts.append(f"  {_short_path(filepath)}:{actual_line}")
+                parts.append(f"    {display}")
+                shown += 1
+                break
+
+    if len(parts) == 1:
+        return []  # Only header, no matches
+    return parts
+
+
 @mcp.tool()
-def search_source(query: str, scope: str = "all", limit: int = 20) -> str:
+def search_source(query: str, scope: str = "all", limit: int = 20, mode: str = "fts") -> str:
     """Full-text search across Unreal Engine source code and shaders.
 
     scope: 'cpp' (headers+source), 'shaders' (usf/ush), 'all'
+    mode: 'fts' (default, token-based), 'regex', 'substring'
     Returns both symbol matches and source line matches.
     """
     conn = _get_conn()
 
     parts: list[str] = []
 
-    # Symbol FTS search
-    sym_results = search_symbols_fts(conn, query, limit=limit)
-    if sym_results:
-        parts.append("=== Symbol Matches ===")
-        for sym in sym_results:
-            filepath = _get_file_path(conn, sym["file_id"])
-            sig = sym.get("signature") or ""
-            parts.append(f"  [{sym['kind']}] {sym['qualified_name']} ({_short_path(filepath)}:{sym['line_start']})")
-            if sig:
-                parts.append(f"         {sig}")
-
-    # Source FTS search — map scope to file_type
-    if scope == "cpp":
-        # Search header and source file types
-        source_results = search_source_fts(conn, query, limit=limit, scope="header")
-        source_results += search_source_fts(conn, query, limit=limit, scope="source")
-        source_results += search_source_fts(conn, query, limit=limit, scope="inline")
-    elif scope == "shaders":
-        source_results = search_source_fts(conn, query, limit=limit, scope="shader")
-        source_results += search_source_fts(conn, query, limit=limit, scope="shader_header")
+    if mode in ("regex", "substring"):
+        parts.extend(_search_source_pattern(conn, query, scope, limit, mode))
     else:
-        source_results = search_source_fts(conn, query, limit=limit, scope="all")
+        # Symbol FTS search
+        sym_results = search_symbols_fts(conn, query, limit=limit)
+        if sym_results:
+            parts.append("=== Symbol Matches ===")
+            for sym in sym_results:
+                filepath = _get_file_path(conn, sym["file_id"])
+                sig = sym.get("signature") or ""
+                parts.append(f"  [{sym['kind']}] {sym['qualified_name']} ({_short_path(filepath)}:{sym['line_start']})")
+                if sig:
+                    parts.append(f"         {sig}")
 
-    if source_results:
-        parts.append("\n=== Source Line Matches ===")
-        seen: set[tuple[int, object]] = set()
-        shown = 0
-        for match in source_results:
-            if shown >= limit:
-                break
-            fid = match["file_id"]
-            line_num = match.get("line_number", "?")
-            key = (fid, line_num)
-            if key in seen:
-                continue
-            seen.add(key)
-            filepath = _get_file_path(conn, fid)
-            text = match.get("text", "").strip()
-            # Truncate long text
-            if len(text) > 120:
-                text = text[:120] + "..."
-            parts.append(f"  {_short_path(filepath)}:{line_num}")
-            parts.append(f"    {text}")
-            shown += 1
+        # Source FTS search — map scope to file_type
+        if scope == "cpp":
+            # Search header and source file types
+            source_results = search_source_fts(conn, query, limit=limit, scope="header")
+            source_results += search_source_fts(conn, query, limit=limit, scope="source")
+            source_results += search_source_fts(conn, query, limit=limit, scope="inline")
+        elif scope == "shaders":
+            source_results = search_source_fts(conn, query, limit=limit, scope="shader")
+            source_results += search_source_fts(conn, query, limit=limit, scope="shader_header")
+        else:
+            source_results = search_source_fts(conn, query, limit=limit, scope="all")
+
+        if source_results:
+            parts.append("\n=== Source Line Matches ===")
+            seen: set[tuple[int, object]] = set()
+            shown = 0
+            for match in source_results:
+                if shown >= limit:
+                    break
+                fid = match["file_id"]
+                line_num = match.get("line_number", "?")
+                key = (fid, line_num)
+                if key in seen:
+                    continue
+                seen.add(key)
+                filepath = _get_file_path(conn, fid)
+                text = match.get("text", "").strip()
+                # Truncate long text
+                if len(text) > 120:
+                    text = text[:120] + "..."
+                parts.append(f"  {_short_path(filepath)}:{line_num}")
+                parts.append(f"    {text}")
+                shown += 1
 
     if not parts:
         return f"No results found for '{query}'."
