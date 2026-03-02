@@ -128,3 +128,42 @@ def test_pipeline_qualified_names(indexed_db):
     results = search_symbols_fts(indexed_db, "DoSomething")
     qualified_names = [r["qualified_name"] for r in results]
     assert any("ASampleActor::DoSomething" in qn for qn in qualified_names)
+
+
+def test_pipeline_prefers_definition_over_forward_decl(db):
+    """When both a forward declaration and a real definition exist,
+    _symbol_name_to_id should point to the real definition."""
+    pipeline = IndexingPipeline(db)
+    pipeline.index_directory(FIXTURES, module_name="SampleModule")
+
+    # FSampleData is forward-declared in ForwardDecl.h (single line)
+    # and fully defined in SampleActor.h (multi-line struct with members)
+    sym_id = pipeline._symbol_name_to_id.get("FSampleData")
+    assert sym_id is not None
+
+    # The symbol should be the multi-line definition, not the forward decl
+    row = db.execute(
+        "SELECT * FROM symbols WHERE id = ?", (sym_id,)
+    ).fetchone()
+    assert row is not None
+    assert row["line_end"] > row["line_start"], (
+        f"Expected multi-line definition, got lines {row['line_start']}-{row['line_end']}"
+    )
+
+
+def test_pipeline_prefers_definition_for_class_map(db):
+    """_class_name_to_id should also prefer definitions over forward decls."""
+    pipeline = IndexingPipeline(db)
+    pipeline.index_directory(FIXTURES, module_name="SampleModule")
+
+    # ASampleActor is forward-declared in ForwardDecl.h and defined in SampleActor.h
+    class_id = pipeline._class_name_to_id.get("ASampleActor")
+    assert class_id is not None
+
+    row = db.execute(
+        "SELECT * FROM symbols WHERE id = ?", (class_id,)
+    ).fetchone()
+    assert row is not None
+    assert row["line_end"] > row["line_start"], (
+        f"Expected multi-line class definition, got lines {row['line_start']}-{row['line_end']}"
+    )

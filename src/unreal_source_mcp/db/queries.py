@@ -119,13 +119,20 @@ def insert_include(
 # ── Query helpers ────────────────────────────────────────────────────────
 
 def get_symbol_by_name(conn: sqlite3.Connection, name: str) -> dict | None:
-    """Exact match on qualified_name first, then fall back to name."""
+    """Exact match on qualified_name first, then fall back to name.
+
+    Prefers multi-line definitions over single-line forward declarations.
+    """
     row = conn.execute(
-        "SELECT * FROM symbols WHERE qualified_name = ? LIMIT 1", (name,)
+        "SELECT * FROM symbols WHERE qualified_name = ? "
+        "ORDER BY (line_end > line_start) DESC LIMIT 1",
+        (name,),
     ).fetchone()
     if row is None:
         row = conn.execute(
-            "SELECT * FROM symbols WHERE name = ? LIMIT 1", (name,)
+            "SELECT * FROM symbols WHERE name = ? "
+            "ORDER BY (line_end > line_start) DESC LIMIT 1",
+            (name,),
         ).fetchone()
     return _row_to_dict(row)
 
@@ -140,13 +147,18 @@ def get_symbol_by_id(conn: sqlite3.Connection, symbol_id: int) -> dict | None:
 def get_symbols_by_name(
     conn: sqlite3.Connection, name: str, kind: str | None = None,
 ) -> list[dict]:
+    """Find symbols by name, with definitions sorted before forward declarations."""
     if kind:
         rows = conn.execute(
-            "SELECT * FROM symbols WHERE name = ? AND kind = ?", (name, kind)
+            "SELECT * FROM symbols WHERE name = ? AND kind = ? "
+            "ORDER BY (line_end > line_start) DESC",
+            (name, kind),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM symbols WHERE name = ?", (name,)
+            "SELECT * FROM symbols WHERE name = ? "
+            "ORDER BY (line_end > line_start) DESC",
+            (name,),
         ).fetchall()
     return _rows_to_dicts(rows)
 

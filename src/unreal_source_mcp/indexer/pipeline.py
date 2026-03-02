@@ -6,7 +6,7 @@ import logging
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from unreal_source_mcp.db.queries import (
     get_file_by_path,
@@ -41,7 +41,9 @@ class IndexingPipeline:
         self._cpp_parser = CppParser()
         self._shader_parser = ShaderParser()
         self._symbol_name_to_id: dict[str, Any] = {}
+        self._symbol_spans: dict[str, tuple[int, int]] = {}  # name → (line_start, line_end)
         self._class_name_to_id: dict[str, int] = {}  # class/struct only — for inheritance
+        self._class_spans: dict[str, tuple[int, int]] = {}  # class name → (line_start, line_end)
         conn.commit()
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
@@ -111,15 +113,22 @@ class IndexingPipeline:
         self,
         source_path: Path,
         shader_path: Path | None = None,
+        on_progress: Callable[[str, int, int, int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Index an entire Unreal Engine source tree.
 
         Walks Engine/Source/{Runtime,Editor,Developer,Programs} and Plugins.
+
+        *on_progress*, if provided, is called after each module:
+            on_progress(module_name, module_index, total_modules, files_so_far, symbols_so_far)
         """
         source_path = Path(source_path)
         total_files = 0
         total_symbols = 0
         total_errors = 0
+
+        # First pass: discover all modules so we can report total count
+        modules: list[tuple[Path, str, str]] = []  # (path, name, type)
 
         categories = ["Runtime", "Editor", "Developer", "Programs"]
         for category in categories:
@@ -128,44 +137,36 @@ class IndexingPipeline:
                 continue
             for sub in sorted(cat_dir.iterdir()):
                 if sub.is_dir():
-                    stats = self.index_directory(
-                        sub,
-                        module_name=sub.name,
-                        module_type=category,
-                        finalize=False,
-                    )
-                    total_files += stats["files_processed"]
-                    total_symbols += stats["symbols_extracted"]
-                    total_errors += stats["errors"]
+                    modules.append((sub, sub.name, category))
 
-        # Plugins — walk source_path.parent / "Plugins" looking for Source dirs
         plugins_dir = source_path.parent / "Plugins"
         if plugins_dir.is_dir():
             for source_dir in sorted(plugins_dir.rglob("Source")):
                 if source_dir.is_dir():
-                    stats = self.index_directory(
-                        source_dir,
-                        module_name=source_dir.parent.name,
-                        module_type="Plugin",
-                        finalize=False,
-                    )
-                    total_files += stats["files_processed"]
-                    total_symbols += stats["symbols_extracted"]
-                    total_errors += stats["errors"]
+                    modules.append((source_dir, source_dir.parent.name, "Plugin"))
 
-        # Shaders
         if shader_path and shader_path.is_dir():
+            modules.append((shader_path, "Shaders", "Shaders"))
+
+        total_modules = len(modules)
+
+        for i, (mod_path, mod_name, mod_type) in enumerate(modules):
             stats = self.index_directory(
-                shader_path,
-                module_name="Shaders",
-                module_type="Shaders",
+                mod_path,
+                module_name=mod_name,
+                module_type=mod_type,
                 finalize=False,
             )
             total_files += stats["files_processed"]
             total_symbols += stats["symbols_extracted"]
             total_errors += stats["errors"]
 
+            if on_progress:
+                on_progress(mod_name, i + 1, total_modules, total_files, total_symbols)
+
         # Global finalize — resolve inheritance and references across all modules
+        if on_progress:
+            on_progress("Finalizing (inheritance + references)...", total_modules, total_modules, total_files, total_symbols)
         self._finalize()
 
         return {
@@ -255,14 +256,15 @@ class IndexingPipeline:
                 is_ue_macro=1 if sym.is_ue_macro else 0,
             )
 
-            # Track all symbols for reference resolution
-            self._symbol_name_to_id[sym.name] = sym_id
+            # Track all symbols for reference resolution — prefer definitions
+            # over forward declarations (multi-line span = real definition)
+            self._update_symbol_map(sym.name, sym_id, sym.line_start, sym.line_end)
             if qualified_name != sym.name:
-                self._symbol_name_to_id[qualified_name] = sym_id
+                self._update_symbol_map(qualified_name, sym_id, sym.line_start, sym.line_end)
 
-            # Track classes/structs separately for inheritance (first definition wins)
+            # Track classes/structs separately for inheritance — prefer definitions
             if sym.kind in ("class", "struct"):
-                self._class_name_to_id.setdefault(sym.name, sym_id)
+                self._update_class_map(sym.name, sym_id, sym.line_start, sym.line_end)
                 if sym.base_classes:
                     # Only store bases if not already set (first definition is canonical)
                     self._symbol_name_to_id.setdefault(f"_bases_{sym.name}", sym.base_classes)
@@ -339,23 +341,16 @@ class IndexingPipeline:
         return count
 
     def _insert_source_lines(self, file_id: int, lines: list[str]) -> None:
-        """Group every 10 non-empty lines into one FTS row."""
+        """Group every 10 consecutive lines into one FTS row.
+
+        Includes blank lines to keep line numbers exact — chunk_start is the
+        1-based line number of the first line in the chunk.
+        """
         batch: list[tuple[int, int, str]] = []
-        chunk: list[str] = []
-        chunk_start = 0
 
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if not chunk:
-                chunk_start = i + 1  # 1-based
-            chunk.append(stripped)
-            if len(chunk) >= 10:
-                batch.append((file_id, chunk_start, "\n".join(chunk)))
-                chunk = []
-
-        if chunk:
+        for i in range(0, len(lines), 10):
+            chunk = lines[i : i + 10]
+            chunk_start = i + 1  # 1-based
             batch.append((file_id, chunk_start, "\n".join(chunk)))
 
         if batch:
@@ -363,6 +358,40 @@ class IndexingPipeline:
                 "INSERT INTO source_fts (file_id, line_number, text) VALUES (?, ?, ?)",
                 batch,
             )
+
+    @staticmethod
+    def _is_definition(line_start: int, line_end: int) -> bool:
+        """A multi-line span indicates a real definition, not a forward declaration."""
+        return line_end > line_start
+
+    def _update_symbol_map(
+        self, name: str, sym_id: int, line_start: int, line_end: int
+    ) -> None:
+        """Update _symbol_name_to_id, preferring definitions over forward decls."""
+        if name.startswith("_bases_"):
+            return  # Don't interfere with base-class tracking
+        existing_span = self._symbol_spans.get(name)
+        if existing_span is None:
+            # No existing entry — just set it
+            self._symbol_name_to_id[name] = sym_id
+            self._symbol_spans[name] = (line_start, line_end)
+        elif self._is_definition(line_start, line_end) and not self._is_definition(*existing_span):
+            # New is a definition, existing is a forward decl — overwrite
+            self._symbol_name_to_id[name] = sym_id
+            self._symbol_spans[name] = (line_start, line_end)
+        # Otherwise keep existing (it's already a definition, or both are forward decls)
+
+    def _update_class_map(
+        self, name: str, sym_id: int, line_start: int, line_end: int
+    ) -> None:
+        """Update _class_name_to_id, preferring definitions over forward decls."""
+        existing_span = self._class_spans.get(name)
+        if existing_span is None:
+            self._class_name_to_id[name] = sym_id
+            self._class_spans[name] = (line_start, line_end)
+        elif self._is_definition(line_start, line_end) and not self._is_definition(*existing_span):
+            self._class_name_to_id[name] = sym_id
+            self._class_spans[name] = (line_start, line_end)
 
     def _resolve_inheritance(self) -> None:
         """Second pass: resolve base class names to symbol IDs and insert inheritance.

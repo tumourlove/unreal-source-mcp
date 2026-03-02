@@ -36,15 +36,20 @@ class ReferenceBuilder:
         tree = self._parser.parse(source_bytes)
 
         count = 0
+
+        # Track function_definition nodes so we can skip them in global-scope pass
+        func_nodes: set[int] = set()  # node id (by id())
+
         for func_node in self._find_nodes(tree.root_node, "function_definition"):
+            func_nodes.add(id(func_node))
             caller_name = self._get_function_name(func_node)
             caller_id = self._resolve_symbol(caller_name)
             if caller_id is None:
                 continue
 
-            # Call references (existing)
+            # Call references
             for call_node in self._find_nodes(func_node, "call_expression"):
-                callee_name = self._get_call_target(call_node)
+                callee_name = self._get_call_target(call_node, func_node)
                 callee_id = self._resolve_symbol(callee_name)
                 if callee_id is None or callee_id == caller_id:
                     continue
@@ -60,8 +65,16 @@ class ReferenceBuilder:
                 )
                 count += 1
 
-            # Type references (new)
+            # Type references within functions
             count += self._extract_type_references(func_node, caller_id, file_id)
+
+        # Class-scope references (base classes, member types)
+        count += self._extract_class_scope_references(tree.root_node, file_id)
+
+        # Global-scope references (top-level declarations outside functions/classes)
+        count += self._extract_global_scope_references(
+            tree.root_node, file_id, func_nodes
+        )
 
         return count
 
@@ -92,6 +105,124 @@ class ReferenceBuilder:
 
         return count
 
+    def _extract_class_scope_references(
+        self, root: Node, file_id: int,
+    ) -> int:
+        """Extract type references from class/struct scope: base classes and member types."""
+        count = 0
+        for class_node in self._find_nodes(root, "class_specifier") + self._find_nodes(root, "struct_specifier"):
+            # Get the class name to use as from_symbol
+            class_name = None
+            for child in class_node.children:
+                if child.type == "type_identifier":
+                    class_name = child.text.decode()
+                    break
+            if not class_name:
+                name_node = class_node.child_by_field_name("name")
+                if name_node:
+                    class_name = name_node.text.decode()
+            if not class_name:
+                continue
+
+            class_id = self._resolve_symbol(class_name)
+            if class_id is None:
+                continue
+
+            seen: set[int] = set()
+
+            # Base class references
+            for bc_node in self._find_nodes(class_node, "base_class_clause"):
+                for child in bc_node.children:
+                    if child.type == "type_identifier":
+                        base_name = child.text.decode()
+                        base_id = self._resolve_symbol(base_name)
+                        if base_id is not None and base_id != class_id and base_id not in seen:
+                            seen.add(base_id)
+                            insert_reference(
+                                self._conn,
+                                from_symbol_id=class_id,
+                                to_symbol_id=base_id,
+                                ref_kind="type",
+                                file_id=file_id,
+                                line=child.start_point[0] + 1,
+                            )
+                            count += 1
+
+            # Member type references from field_declaration_list
+            for field_list in self._find_nodes(class_node, "field_declaration_list"):
+                for type_node in self._find_nodes(field_list, "type_identifier"):
+                    type_name = type_node.text.decode()
+                    type_id = self._resolve_symbol(type_name)
+                    if type_id is not None and type_id != class_id and type_id not in seen:
+                        seen.add(type_id)
+                        insert_reference(
+                            self._conn,
+                            from_symbol_id=class_id,
+                            to_symbol_id=type_id,
+                            ref_kind="type",
+                            file_id=file_id,
+                            line=type_node.start_point[0] + 1,
+                        )
+                        count += 1
+
+        return count
+
+    def _extract_global_scope_references(
+        self, root: Node, file_id: int, func_nodes: set[int],
+    ) -> int:
+        """Extract type references from top-level declarations (not inside functions or classes)."""
+        count = 0
+        class_types = {"class_specifier", "struct_specifier"}
+
+        for child in root.children:
+            # Skip function definitions (already handled) and class/struct specifiers
+            if id(child) in func_nodes:
+                continue
+            if child.type in class_types:
+                continue
+            if child.type not in ("declaration", "expression_statement"):
+                continue
+
+            # Find the declared symbol name to use as from_symbol
+            decl_name = None
+            for sub in child.children:
+                if sub.type in ("identifier", "field_identifier"):
+                    decl_name = sub.text.decode()
+                elif sub.type == "init_declarator":
+                    for d in sub.children:
+                        if d.type == "identifier":
+                            decl_name = d.text.decode()
+                            break
+
+            decl_id = self._resolve_symbol(decl_name) if decl_name else None
+
+            # Extract type references from this declaration
+            seen: set[int] = set()
+            for type_node in self._find_nodes(child, "type_identifier"):
+                type_name = type_node.text.decode()
+                type_id = self._resolve_symbol(type_name)
+                if type_id is None or type_id in seen:
+                    continue
+                if decl_id is not None and type_id == decl_id:
+                    continue
+                seen.add(type_id)
+
+                from_id = decl_id if decl_id is not None else type_id
+                if from_id == type_id:
+                    continue  # Don't self-reference
+
+                insert_reference(
+                    self._conn,
+                    from_symbol_id=from_id,
+                    to_symbol_id=type_id,
+                    ref_kind="type",
+                    file_id=file_id,
+                    line=type_node.start_point[0] + 1,
+                )
+                count += 1
+
+        return count
+
     def _find_nodes(self, node: Node, type_name: str) -> list[Node]:
         """Iteratively find all descendant nodes of a given type."""
         results: list[Node] = []
@@ -114,8 +245,16 @@ class ReferenceBuilder:
                         return fc.text.decode()
         return None
 
-    def _get_call_target(self, call_node: Node) -> str | None:
-        """Get the function name from a call_expression."""
+    def _get_call_target(
+        self, call_node: Node, func_node: Node | None = None,
+    ) -> str | None:
+        """Get the function name from a call_expression.
+
+        For field_expression calls (obj->Method() or obj.Method()), tries to
+        resolve the object's type from local variable declarations within
+        *func_node* and returns a qualified name like ``ClassName::Method``.
+        Falls back to the unqualified method name.
+        """
         if not call_node.children:
             return None
         fn = call_node.children[0]
@@ -125,10 +264,73 @@ class ReferenceBuilder:
             return fn.text.decode()
         if fn.type == "field_expression":
             field = fn.child_by_field_name("field")
+            method_name = None
             if field:
-                return field.text.decode()
-            if fn.named_children:
-                return fn.named_children[-1].text.decode()
+                method_name = field.text.decode()
+            elif fn.named_children:
+                method_name = fn.named_children[-1].text.decode()
+            if not method_name:
+                return None
+
+            # Try to resolve the object type for qualified lookup
+            if func_node is not None:
+                argument = fn.child_by_field_name("argument")
+                if argument is None and fn.named_children:
+                    argument = fn.named_children[0]
+                if argument and argument.type == "identifier":
+                    var_name = argument.text.decode()
+                    obj_type = self._resolve_local_var_type(func_node, var_name)
+                    if obj_type:
+                        qualified = f"{obj_type}::{method_name}"
+                        if self._resolve_symbol(qualified) is not None:
+                            return qualified
+
+            return method_name
+        return None
+
+    def _resolve_local_var_type(
+        self, func_node: Node, var_name: str,
+    ) -> str | None:
+        """Scan declarations in a function body for ``Type* var`` or ``Type& var``.
+
+        Returns the type name if found, else None. Only handles simple local
+        variable declarations — not parameters, members, or chained expressions.
+        """
+        # Look in the compound_statement (function body)
+        body = None
+        for child in func_node.children:
+            if child.type == "compound_statement":
+                body = child
+                break
+        if body is None:
+            return None
+
+        for decl in self._find_nodes(body, "declaration"):
+            # Pattern: TypeName* VarName or TypeName& VarName
+            # tree-sitter structure: declaration -> type_identifier + pointer_declarator/reference_declarator -> identifier
+            for child in decl.children:
+                if child.type == "pointer_declarator":
+                    for sub in child.children:
+                        if sub.type == "identifier" and sub.text.decode() == var_name:
+                            # Found the variable — get the type
+                            for tc in decl.children:
+                                if tc.type == "type_identifier":
+                                    return tc.text.decode()
+                elif child.type == "reference_declarator":
+                    for sub in child.children:
+                        if sub.type == "identifier" and sub.text.decode() == var_name:
+                            for tc in decl.children:
+                                if tc.type == "type_identifier":
+                                    return tc.text.decode()
+                elif child.type == "init_declarator":
+                    # TypeName* VarName = expr; tree-sitter may wrap in init_declarator
+                    for sub in child.children:
+                        if sub.type == "pointer_declarator":
+                            for psub in sub.children:
+                                if psub.type == "identifier" and psub.text.decode() == var_name:
+                                    for tc in decl.children:
+                                        if tc.type == "type_identifier":
+                                            return tc.text.decode()
         return None
 
     def _resolve_symbol(self, name: str | None) -> int | None:

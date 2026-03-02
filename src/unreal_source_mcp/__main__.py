@@ -70,7 +70,24 @@ def _run_index(*, reindex: bool = False) -> None:
 
     pipeline = IndexingPipeline(conn)
     shader_path = Path(UE_SHADER_PATH) if UE_SHADER_PATH else None
-    stats = pipeline.index_engine(source_path, shader_path=shader_path)
+
+    def _progress(
+        module: str, done: int, total: int, files: int, symbols: int,
+    ) -> None:
+        bar_width = 30
+        frac = done / total if total else 1
+        filled = int(bar_width * frac)
+        bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
+        pct = int(frac * 100)
+        print(
+            f"\r  {bar} {pct:3d}% ({done}/{total}) {files} files, {symbols} syms | {module:<40}",
+            end="", flush=True, file=sys.stderr,
+        )
+        if done == total and module.startswith("Finalizing"):
+            pass  # Keep on same line until done
+
+    stats = pipeline.index_engine(source_path, shader_path=shader_path, on_progress=_progress)
+    print(file=sys.stderr)  # newline after progress bar
 
     conn.close()
 

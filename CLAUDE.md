@@ -131,7 +131,7 @@ uvx unreal-source-mcp
 
 - **All SQL lives in `db/queries.py`** — no inline SQL in tool handlers
 - **Tool handlers are thin** — validate params, call query, format response
-- **UE macro handling is centralized** in `indexer/ue_macros.py`
+- **UE macro handling lives in `indexer/cpp_parser.py`** — `UE_MACROS` set, `_try_get_ue_macro()`, `_try_get_ue_macro_field()`, etc.
 - Follow standard Python conventions: snake_case, type hints, docstrings on public functions
 - Use `logging` module, not print statements
 - Tests use pytest with fixtures in `tests/fixtures/`
@@ -144,6 +144,11 @@ uvx unreal-source-mcp
 - `DECLARE_DELEGATE*`, `DECLARE_DYNAMIC_MULTICAST_DELEGATE*` — extract as delegate symbols
 - `TEXT("...")` and `LOCTEXT(...)` are string macros — don't confuse with function calls
 - Shader files use `#include "/Engine/..."` paths — resolve relative to shader root
+
+## Known Limitations / Future Work
+
+- **Incremental indexing:** The `last_modified` column exists in the `files` table and `st_mtime` is already stored during indexing. A future enhancement should compare mtimes and skip unchanged files, with careful handling of cross-file reference invalidation when a single file changes.
+- **Method call type inference:** `->Method()` calls resolve to the unqualified method name when the object type can't be determined from local variable declarations. Full type inference (member variables, function parameters, chained calls) is not implemented.
 
 ## Design Doc
 
