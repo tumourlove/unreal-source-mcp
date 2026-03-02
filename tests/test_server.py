@@ -123,6 +123,15 @@ def test_find_callers_no_crash():
     assert isinstance(result, str)
 
 
+def test_find_callers_smart_no_results_message():
+    """find_callers should show a helpful message when no callers found."""
+    result = server.find_callers("GetHealth")
+    # GetHealth has no callers in our fixture
+    assert "No direct" in result or "delegates" in result or "Blueprints" in result
+    # Should NOT be just the old plain message
+    assert result != "No callers found for 'GetHealth'."
+
+
 # ── find_callees (no crash) ──────────────────────────────────────────────
 
 def test_find_callees_no_crash():

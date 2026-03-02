@@ -305,7 +305,30 @@ def find_callers(function: str, limit: int = 50) -> str:
             lines.append(f"{from_name} \u2014 {_short_path(path)}:{line}")
 
     if not lines:
-        return f"No callers found for '{function}'."
+        # Search for function pointer / delegate references
+        func_name = symbols[0]["name"]
+        qualified = symbols[0]["qualified_name"]
+
+        delegate_hits: list[str] = []
+        # Search source FTS for the function name — look for & references in raw text
+        delegate_results = search_source_fts(conn, func_name, limit=10)
+        for match in delegate_results:
+            text = match.get("text", "")
+            if "&" in text and func_name in text:
+                fid = match["file_id"]
+                filepath = _get_file_path(conn, fid)
+                line_num = match.get("line_number", "?")
+                delegate_hits.append(f"  {_short_path(filepath)}:{line_num}")
+
+        msg = (
+            f"No direct C++ callers found for '{function}'. "
+            "This function may be called via delegates, Blueprints, "
+            "input bindings, or reflection (e.g. ProcessEvent)."
+        )
+        if delegate_hits:
+            msg += "\n\nPossible indirect references (delegates/bindings):\n"
+            msg += "\n".join(delegate_hits)
+        return msg
     return "\n".join(lines)
 
 
