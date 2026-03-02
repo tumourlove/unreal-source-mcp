@@ -27,3 +27,10 @@ void ASampleActor::InternalHelper()
 {
     DoSomething(0.0f);
 }
+
+void FreeFunctionUsingTypes()
+{
+    FSampleData Data;
+    Data.Value = 1.0f;
+    ASampleActor* Actor = nullptr;
+}

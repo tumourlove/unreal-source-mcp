@@ -41,6 +41,25 @@ def test_internal_helper_calls_dosomething(populated_db):
     assert any("InternalHelper" in name for name in caller_names), f"Expected InternalHelper in callers, got: {caller_names}"
 
 
+def test_type_references_extracted(populated_db):
+    """ReferenceBuilder should extract type references (e.g. FSampleData used in a function)."""
+    row = populated_db.execute(
+        'SELECT COUNT(*) AS cnt FROM "references" WHERE ref_kind = ?',
+        ("type",),
+    ).fetchone()
+    assert row["cnt"] > 0, "Expected type references to be extracted"
+
+
+def test_type_reference_to_fsampledata(populated_db):
+    """FreeFunctionUsingTypes uses FSampleData — should have a type reference."""
+    syms = get_symbols_by_name(populated_db, "FSampleData")
+    assert len(syms) > 0
+    all_refs = []
+    for s in syms:
+        all_refs.extend(get_references_to(populated_db, s["id"], ref_kind="type"))
+    assert len(all_refs) > 0, f"Expected type references to FSampleData"
+
+
 def test_dosomething_calls_getworld(populated_db):
     """DoSomething calls GetWorld — should have an outgoing call reference (if GetWorld is indexed)."""
     # GetWorld may not be in our fixture symbols since it's inherited from AActor

@@ -27,7 +27,7 @@ class ReferenceBuilder:
         self._parser = Parser(CPP_LANGUAGE)
 
     def extract_references(self, path: Path, file_id: int) -> int:
-        """Parse a C++ file and insert call references. Returns count."""
+        """Parse a C++ file and insert call + type references. Returns count."""
         try:
             source_bytes = path.read_bytes()
         except OSError:
@@ -42,6 +42,7 @@ class ReferenceBuilder:
             if caller_id is None:
                 continue
 
+            # Call references (existing)
             for call_node in self._find_nodes(func_node, "call_expression"):
                 callee_name = self._get_call_target(call_node)
                 callee_id = self._resolve_symbol(callee_name)
@@ -58,6 +59,36 @@ class ReferenceBuilder:
                     line=line,
                 )
                 count += 1
+
+            # Type references (new)
+            count += self._extract_type_references(func_node, caller_id, file_id)
+
+        return count
+
+    def _extract_type_references(
+        self, func_node: Node, caller_id: int, file_id: int,
+    ) -> int:
+        """Extract type_identifier nodes that reference known symbols."""
+        count = 0
+        seen: set[int] = set()  # Deduplicate by target symbol id within a function
+
+        for node in self._find_nodes(func_node, "type_identifier"):
+            type_name = node.text.decode()
+            type_id = self._resolve_symbol(type_name)
+            if type_id is None or type_id == caller_id or type_id in seen:
+                continue
+            seen.add(type_id)
+
+            line = node.start_point[0] + 1
+            insert_reference(
+                self._conn,
+                from_symbol_id=caller_id,
+                to_symbol_id=type_id,
+                ref_kind="type",
+                file_id=file_id,
+                line=line,
+            )
+            count += 1
 
         return count
 

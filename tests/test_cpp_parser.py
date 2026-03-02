@@ -222,10 +222,12 @@ class TestCppDefinitions:
         fn = _find(cpp_result, "ASampleActor::InternalHelper", "function")
         assert fn is not None
 
-    def test_all_functions_have_parent(self, cpp_result):
+    def test_all_methods_have_parent(self, cpp_result):
         fns = _find_all(cpp_result, "function")
-        assert len(fns) == 4  # constructor + 3 methods
-        for fn in fns:
+        assert len(fns) == 5  # constructor + 3 methods + 1 free function
+        methods = [fn for fn in fns if fn.parent_class is not None]
+        assert len(methods) == 4
+        for fn in methods:
             assert fn.parent_class == "ASampleActor"
 
 
