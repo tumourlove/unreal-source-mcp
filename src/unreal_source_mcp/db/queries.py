@@ -196,6 +196,85 @@ def search_source_fts(
     return _rows_to_dicts(rows)
 
 
+def search_symbols_fts_filtered(
+    conn: sqlite3.Connection, query: str, limit: int = 20,
+    kind: str | None = None, module: str | None = None, path_filter: str | None = None,
+) -> list[dict]:
+    """FTS symbol search with optional kind, module, and path filters."""
+    fts_query = _escape_fts(query)
+    sql = (
+        "SELECT s.* FROM symbols_fts f "
+        "JOIN symbols s ON s.id = f.rowid "
+    )
+    conditions = ["symbols_fts MATCH ?"]
+    params: list = [fts_query]
+
+    if module or path_filter:
+        sql += "JOIN files fi ON fi.id = s.file_id "
+    if module:
+        sql += "JOIN modules m ON m.id = fi.module_id "
+        conditions.append("m.name = ?")
+        params.append(module)
+    if kind:
+        conditions.append("s.kind = ?")
+        params.append(kind)
+    if path_filter:
+        conditions.append("fi.path LIKE ?")
+        params.append(f"%{path_filter}%")
+
+    sql += "WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY bm25(symbols_fts) LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def search_source_fts_filtered(
+    conn: sqlite3.Connection, query: str, limit: int = 20, scope: str = "all",
+    module: str | None = None, path_filter: str | None = None,
+) -> list[dict]:
+    """FTS source search with optional module and path filters."""
+    fts_query = _escape_fts(query)
+
+    if scope == "all" and not module and not path_filter:
+        # Fast path — no joins needed (same as original search_source_fts)
+        rows = conn.execute(
+            "SELECT f.file_id, f.line_number, f.text "
+            "FROM source_fts f "
+            "WHERE source_fts MATCH ? "
+            "ORDER BY bm25(source_fts) LIMIT ?",
+            (fts_query, limit),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+    sql = (
+        "SELECT sf.file_id, sf.line_number, sf.text "
+        "FROM source_fts sf "
+        "JOIN files fi ON fi.id = sf.file_id "
+    )
+    conditions: list[str] = ["source_fts MATCH ?"]
+    params: list = [fts_query]
+
+    if module:
+        sql += "JOIN modules m ON m.id = fi.module_id "
+        conditions.append("m.name = ?")
+        params.append(module)
+    if scope != "all":
+        conditions.append("fi.file_type = ?")
+        params.append(scope)
+    if path_filter:
+        conditions.append("fi.path LIKE ?")
+        params.append(f"%{path_filter}%")
+
+    sql += "WHERE " + " AND ".join(conditions)
+    sql += " ORDER BY bm25(source_fts) LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+
 def get_source_chunks(
     conn: sqlite3.Connection, keyword: str, scope: str = "all", limit: int = 500,
 ) -> list[dict]:

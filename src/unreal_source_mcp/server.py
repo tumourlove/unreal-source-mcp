@@ -24,7 +24,9 @@ from unreal_source_mcp.db.queries import (
     get_symbols_by_name,
     get_symbols_in_module,
     search_source_fts,
+    search_source_fts_filtered,
     search_symbols_fts,
+    search_symbols_fts_filtered,
 )
 
 mcp = FastMCP(
@@ -430,11 +432,17 @@ def _search_source_pattern(
 
 
 @mcp.tool()
-def search_source(query: str, scope: str = "all", limit: int = 20, mode: str = "fts") -> str:
+def search_source(
+    query: str, scope: str = "all", limit: int = 20, mode: str = "fts",
+    module: str = "", path_filter: str = "", symbol_kind: str = "",
+) -> str:
     """Full-text search across Unreal Engine source code and shaders.
 
     scope: 'cpp' (headers+source), 'shaders' (usf/ush), 'all'
     mode: 'fts' (default, token-based), 'regex', 'substring'
+    module: filter to files in this module (e.g. 'Engine')
+    path_filter: filter to files whose path contains this string
+    symbol_kind: filter symbol results by kind (class, function, struct, etc.)
     Returns both symbol matches and source line matches.
     """
     conn = _get_conn()
@@ -445,7 +453,12 @@ def search_source(query: str, scope: str = "all", limit: int = 20, mode: str = "
         parts.extend(_search_source_pattern(conn, query, scope, limit, mode))
     else:
         # Symbol FTS search
-        sym_results = search_symbols_fts(conn, query, limit=limit)
+        sym_results = search_symbols_fts_filtered(
+            conn, query, limit=limit,
+            kind=symbol_kind or None,
+            module=module or None,
+            path_filter=path_filter or None,
+        )
         if sym_results:
             parts.append("=== Symbol Matches ===")
             for sym in sym_results:
@@ -456,16 +469,17 @@ def search_source(query: str, scope: str = "all", limit: int = 20, mode: str = "
                     parts.append(f"         {sig}")
 
         # Source FTS search — map scope to file_type
+        _mod = module or None
+        _pf = path_filter or None
         if scope == "cpp":
-            # Search header and source file types
-            source_results = search_source_fts(conn, query, limit=limit, scope="header")
-            source_results += search_source_fts(conn, query, limit=limit, scope="source")
-            source_results += search_source_fts(conn, query, limit=limit, scope="inline")
+            source_results = search_source_fts_filtered(conn, query, limit=limit, scope="header", module=_mod, path_filter=_pf)
+            source_results += search_source_fts_filtered(conn, query, limit=limit, scope="source", module=_mod, path_filter=_pf)
+            source_results += search_source_fts_filtered(conn, query, limit=limit, scope="inline", module=_mod, path_filter=_pf)
         elif scope == "shaders":
-            source_results = search_source_fts(conn, query, limit=limit, scope="shader")
-            source_results += search_source_fts(conn, query, limit=limit, scope="shader_header")
+            source_results = search_source_fts_filtered(conn, query, limit=limit, scope="shader", module=_mod, path_filter=_pf)
+            source_results += search_source_fts_filtered(conn, query, limit=limit, scope="shader_header", module=_mod, path_filter=_pf)
         else:
-            source_results = search_source_fts(conn, query, limit=limit, scope="all")
+            source_results = search_source_fts_filtered(conn, query, limit=limit, scope="all", module=_mod, path_filter=_pf)
 
         if source_results:
             parts.append("\n=== Source Line Matches ===")

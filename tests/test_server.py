@@ -185,3 +185,35 @@ def test_search_source_fts_mode_default():
     """search_source with default mode should work as before (FTS)."""
     result = server.search_source("DoSomething")
     assert "DoSomething" in result
+
+
+# ── search_source module/path/kind filtering ──────────────────────────
+
+def test_search_source_module_filter():
+    """search_source with module filter should only return results from that module."""
+    result = server.search_source("ASampleActor", module="sample_ue_source")
+    assert "ASampleActor" in result
+
+
+def test_search_source_module_filter_excludes():
+    """search_source with wrong module should return no results."""
+    result = server.search_source("ASampleActor", module="NonExistentModule")
+    assert "No results" in result
+
+
+def test_search_source_path_filter():
+    """search_source with path_filter should scope results."""
+    result = server.search_source("ASampleActor", path_filter="SampleActor")
+    assert "ASampleActor" in result
+
+
+def test_search_source_symbol_kind_filter():
+    """search_source with symbol_kind should filter symbol results by kind."""
+    result = server.search_source("ASampleActor", symbol_kind="class")
+    assert "[class]" in result
+
+
+def test_search_source_symbol_kind_function():
+    """search_source with symbol_kind='function' filters to functions."""
+    result = server.search_source("DoSomething", symbol_kind="function")
+    assert "DoSomething" in result
