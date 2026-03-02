@@ -119,10 +119,60 @@ def _is_forward_declaration(path: str, line_start: int, line_end: int) -> bool:
     return False
 
 
+def _extract_members(path: str, start: int, end: int) -> str:
+    """Extract member declarations from a class/struct, skipping inline implementations."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return f"[Error reading {path}]"
+
+    start = max(1, start)
+    end = min(len(lines), end)
+    result_lines: list[str] = []
+    brace_depth = 0
+    in_body = False
+
+    for i in range(start - 1, end):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Track braces to skip inline function bodies
+        if in_body:
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if brace_depth <= 0:
+                in_body = False
+                brace_depth = 0
+            continue
+
+        # Keep access specifiers, UE macros, declarations, comments, and braces
+        if (stripped.startswith(("public:", "protected:", "private:", "GENERATED"))
+            or stripped.startswith(("UFUNCTION", "UPROPERTY", "UENUM", "USTRUCT"))
+            or stripped.startswith(("//", "/**", "*", "*/"))
+            or stripped == ""
+            or stripped == "{" or stripped == "}"
+            or ";" in stripped):
+            result_lines.append(f"{i+1:5d} | {line}")
+        elif "{" in stripped:
+            # Function with inline body — show signature, skip body
+            sig_part = stripped.split("{")[0].rstrip()
+            if sig_part:
+                result_lines.append(f"{i+1:5d} | {sig_part};  // [inline body omitted]")
+            brace_depth = stripped.count("{") - stripped.count("}")
+            if brace_depth > 0:
+                in_body = True
+
+    return "\n".join(result_lines)
+
+
 # ── Tool 1: read_source ─────────────────────────────────────────────────
 
 @mcp.tool()
-def read_source(symbol: str, include_header: bool = True) -> str:
+def read_source(
+    symbol: str,
+    include_header: bool = True,
+    max_lines: int = 0,
+    members_only: bool = False,
+) -> str:
     """Get the implementation source code for a class, function, or struct.
 
     Shows the actual source lines from disk with line numbers.
@@ -174,10 +224,23 @@ def read_source(symbol: str, include_header: bool = True) -> str:
         if sym.get("docstring"):
             doc = f"// {sym['docstring']}\n"
 
-        source = _read_file_lines(filepath, line_start, line_end)
+        if members_only and sym["kind"] in ("class", "struct"):
+            source = _extract_members(filepath, line_start, line_end)
+        else:
+            source = _read_file_lines(filepath, line_start, line_end)
         parts.append(f"{header}\n{doc}{source}")
 
-    return "\n\n".join(parts) if parts else f"Found symbol '{symbol}' but could not read source files."
+    result = "\n\n".join(parts) if parts else f"Found symbol '{symbol}' but could not read source files."
+
+    # Apply max_lines truncation
+    if max_lines > 0:
+        lines = result.split("\n")
+        if len(lines) > max_lines:
+            result = "\n".join(lines[:max_lines])
+            remaining = len(lines) - max_lines
+            result += f"\n[...truncated, {remaining} more lines]"
+
+    return result
 
 
 # ── Tool 2: find_references ─────────────────────────────────────────────

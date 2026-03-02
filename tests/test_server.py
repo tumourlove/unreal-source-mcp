@@ -72,6 +72,22 @@ def test_read_source_keeps_forward_decl_when_no_definition():
     assert "UPhysicsVolume" in result
 
 
+def test_read_source_max_lines():
+    """read_source with max_lines should truncate output."""
+    full = server.read_source("ASampleActor")
+    truncated = server.read_source("ASampleActor", max_lines=5)
+    # Truncated should be shorter
+    assert len(truncated.split("\n")) < len(full.split("\n"))
+    assert "truncated" in truncated.lower()
+
+
+def test_read_source_members_only():
+    """read_source with members_only should show only member declarations."""
+    result = server.read_source("ASampleActor", members_only=True)
+    assert "DoSomething" in result
+    assert "Health" in result
+
+
 # ── get_class_hierarchy ──────────────────────────────────────────────────
 
 def test_get_class_hierarchy():
