@@ -217,3 +217,19 @@ def test_search_source_symbol_kind_function():
     """search_source with symbol_kind='function' filters to functions."""
     result = server.search_source("DoSomething", symbol_kind="function")
     assert "DoSomething" in result
+
+
+# ── ERROR node / misparsed class recovery ─────────────────────────────
+
+def test_read_source_error_node_class():
+    """read_source should find classes that tree-sitter misparsed as ERROR/declaration nodes."""
+    result = server.read_source("UMultiInterfaceComponent")
+    assert "UMultiInterfaceComponent" in result
+    assert "class" in result.lower()
+
+
+def test_read_source_error_node_members():
+    """read_source with members_only should find members from misparsed classes."""
+    result = server.read_source("UMultiInterfaceComponent", members_only=True)
+    assert "DoMultiThing" in result
+    assert "Speed" in result

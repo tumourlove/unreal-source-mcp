@@ -9,6 +9,7 @@ from unreal_source_mcp.indexer.cpp_parser import CppParser, ParsedSymbol, ParseR
 FIXTURES = Path(__file__).parent / "fixtures" / "sample_ue_source"
 HEADER = FIXTURES / "SampleActor.h"
 CPP = FIXTURES / "SampleActor.cpp"
+ERROR_NODE_HEADER = FIXTURES / "ErrorNodeClass.h"
 
 
 @pytest.fixture
@@ -24,6 +25,11 @@ def header_result(parser):
 @pytest.fixture
 def cpp_result(parser):
     return parser.parse_file(CPP)
+
+
+@pytest.fixture
+def error_node_result(parser):
+    return parser.parse_file(ERROR_NODE_HEADER)
 
 
 # ── Helper ──────────────────────────────────────────────────────────
@@ -245,3 +251,33 @@ class TestSourceLines:
 
     def test_path_set(self, header_result):
         assert "SampleActor.h" in header_result.path
+
+
+# ── ERROR / misparsed node recovery ─────────────────────────────────
+class TestErrorNodeRecovery:
+    def test_error_node_class_extracted(self, error_node_result):
+        cls = _find(error_node_result, "UMultiInterfaceComponent", "class")
+        assert cls is not None
+
+    def test_error_node_base_classes(self, error_node_result):
+        cls = _find(error_node_result, "UMultiInterfaceComponent", "class")
+        assert "UActorComponent" in cls.base_classes
+        assert "IInterface1" in cls.base_classes
+        assert "IInterface2" in cls.base_classes
+
+    def test_error_node_ue_macro(self, error_node_result):
+        cls = _find(error_node_result, "UMultiInterfaceComponent", "class")
+        assert cls.is_ue_macro is True
+
+    def test_error_node_members(self, error_node_result):
+        fn = _find(error_node_result, "DoMultiThing", "function")
+        assert fn is not None
+        assert fn.parent_class == "UMultiInterfaceComponent"
+        assert fn.is_ue_macro is True
+        assert fn.access == "public"
+
+        var = _find(error_node_result, "Speed", "variable")
+        assert var is not None
+        assert var.parent_class == "UMultiInterfaceComponent"
+        assert var.is_ue_macro is True
+        assert var.access == "public"

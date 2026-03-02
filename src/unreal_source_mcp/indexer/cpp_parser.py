@@ -125,6 +125,22 @@ class CppParser:
                     )
                     i += 2
                     continue
+                elif next_node.type == "ERROR":
+                    # tree-sitter fails to parse complex UE class declarations
+                    # (e.g. multiple inheritance with interfaces) and emits ERROR nodes
+                    self._extract_class_from_error_node(
+                        next_node, source_lines, result, ue_macro=ue_macro
+                    )
+                    i += 2
+                    continue
+                elif next_node.type == "declaration":
+                    # ENGINE_API + multiple inheritance causes tree-sitter to
+                    # misparse the class as a declaration node
+                    self._extract_class_from_error_node(
+                        next_node, source_lines, result, ue_macro=ue_macro
+                    )
+                    i += 2
+                    continue
 
             if node.type in ("class_specifier", "struct_specifier"):
                 self._extract_class_or_struct_or_enum(node, source_lines, result)
@@ -138,6 +154,11 @@ class CppParser:
 
             if node.type == "function_definition":
                 self._extract_misparse_class_or_function(node, source_lines, result)
+                i += 1
+                continue
+
+            if node.type == "ERROR":
+                self._extract_class_from_error_node(node, source_lines, result)
                 i += 1
                 continue
 
@@ -387,6 +408,202 @@ class CppParser:
             if child.type == "field_identifier":
                 return child.text.decode()
         return None
+
+    # ------------------------------------------------------------------
+    # ERROR node recovery (tree-sitter fails on complex UE declarations)
+    # ------------------------------------------------------------------
+
+    _ERROR_CLASS_RE = re.compile(
+        r'\b(class|struct)\s+'
+        r'(?:\w+_API\s+)?'        # optional export macro (ENGINE_API, etc.)
+        r'(\w+)'                   # class/struct name
+        r'(?:\s*(?:final|sealed))?\s*'
+        r'(?::\s*(.+?))?\s*\{',   # optional base clause
+        re.DOTALL,
+    )
+    _BASE_CLASS_RE = re.compile(r'(?:public|protected|private)\s+(\w+)')
+
+    def _extract_class_from_error_node(
+        self, node, source_lines: list[str], result: ParseResult, ue_macro: str | None = None
+    ) -> None:
+        """Extract a class/struct from an ERROR node using regex fallback.
+
+        When tree-sitter can't parse complex UE class declarations (e.g. multiple
+        interface inheritance), it emits ERROR nodes. We use regex on the node text
+        to recover the class name, base classes, and members.
+        """
+        text = node.text.decode() if node.text else ""
+        m = self._ERROR_CLASS_RE.search(text)
+        if not m:
+            return
+
+        kind = m.group(1)  # "class" or "struct"
+        name = m.group(2)
+        base_clause = m.group(3) or ""
+
+        base_classes = self._BASE_CLASS_RE.findall(base_clause)
+
+        docstring = self._get_docstring_above(node, source_lines, ue_macro_above=ue_macro is not None)
+        sig_text = text.split("{")[0].strip() if text else ""
+
+        symbol = ParsedSymbol(
+            name=name,
+            kind=kind,
+            line_start=node.start_point[0] + 1,
+            line_end=node.end_point[0] + 1,
+            signature=sig_text,
+            docstring=docstring,
+            is_ue_macro=ue_macro is not None,
+            base_classes=base_classes,
+        )
+        result.symbols.append(symbol)
+
+        # Try to extract members — search recursively since ERROR/declaration
+        # nodes have unpredictable internal structure
+        body = self._find_body_node(node)
+        default_access = "private" if kind == "class" else "public"
+        if body:
+            if body.type == "field_declaration_list":
+                self._extract_members_from_field_list(
+                    body, source_lines, result, parent_class=name,
+                    default_access=default_access
+                )
+                return
+            elif body.type == "compound_statement":
+                self._extract_members_from_compound(
+                    body, source_lines, result, parent_class=name,
+                    default_access=default_access
+                )
+                return
+
+        # Fallback: regex-based member extraction from source lines
+        # when tree-sitter's AST is too mangled to walk
+        self._extract_members_by_regex(
+            node, source_lines, result, parent_class=name,
+            default_access=default_access
+        )
+
+    def _find_body_node(self, node, depth: int = 0):
+        """Recursively search for a field_declaration_list or compound_statement
+        within a misparsed node tree (max depth 4 to avoid deep traversal)."""
+        if depth > 4:
+            return None
+        for child in node.children:
+            if child.type in ("field_declaration_list", "compound_statement"):
+                return child
+        for child in node.children:
+            found = self._find_body_node(child, depth + 1)
+            if found:
+                return found
+        return None
+
+    _MEMBER_FUNC_RE = re.compile(
+        r'^\s*(?:virtual\s+|static\s+|inline\s+)*'
+        r'(\w[\w:*&<>, ]*?)\s+'  # return type
+        r'(\w+)\s*\([^)]*\)'     # function name + params
+        r'[^;{]*;',              # ends with semicolon (declaration, not definition)
+    )
+    _MEMBER_VAR_RE = re.compile(
+        r'^\s*(\w[\w:*&<>, ]*?)\s+'  # type
+        r'(\w+)\s*'                   # variable name
+        r'(?:=\s*[^;]+)?;',          # optional initializer
+    )
+    _ACCESS_RE = re.compile(r'^\s*(public|protected|private)\s*:')
+
+    def _extract_members_by_regex(
+        self, node, source_lines: list[str], result: ParseResult,
+        parent_class: str = "", default_access: str = "private"
+    ) -> None:
+        """Extract members using regex when tree-sitter AST is too broken.
+        Scans source lines within the node's range for UFUNCTION/UPROPERTY
+        decorated declarations and plain declarations."""
+        start_line = node.start_point[0]  # 0-indexed
+        end_line = node.end_point[0]
+
+        current_access = default_access
+        pending_ue_macro: str | None = None
+        # Track which lines we already handled (UE macro lines)
+        skip_next = False
+
+        for line_idx in range(start_line, min(end_line + 1, len(source_lines))):
+            line = source_lines[line_idx]
+            stripped = line.strip()
+
+            if skip_next:
+                skip_next = False
+                continue
+
+            # Skip braces, empty, GENERATED_BODY
+            if not stripped or stripped in ("{", "}", "};"):
+                continue
+            if "GENERATED_BODY" in stripped:
+                continue
+
+            # Access specifier
+            am = self._ACCESS_RE.match(line)
+            if am:
+                current_access = am.group(1)
+                continue
+
+            # UE macro line (UFUNCTION(...), UPROPERTY(...))
+            is_ue_macro_line = False
+            for macro in UE_MACROS:
+                if stripped.startswith(macro + "(") or stripped == macro:
+                    pending_ue_macro = macro
+                    is_ue_macro_line = True
+                    break
+            if is_ue_macro_line:
+                continue
+
+            # Try function declaration
+            fm = self._MEMBER_FUNC_RE.match(line)
+            if fm:
+                ret_type = fm.group(1).strip()
+                func_name = fm.group(2)
+                # Skip if return type looks like a UE macro
+                if ret_type in UE_MACROS or func_name in UE_MACROS:
+                    pending_ue_macro = None
+                    continue
+                sig = stripped.rstrip(";").strip()
+                result.symbols.append(ParsedSymbol(
+                    name=func_name,
+                    kind="function",
+                    line_start=line_idx + 1,
+                    line_end=line_idx + 1,
+                    signature=sig,
+                    access=current_access,
+                    is_ue_macro=pending_ue_macro is not None,
+                    parent_class=parent_class,
+                ))
+                pending_ue_macro = None
+                continue
+
+            # Try variable declaration
+            vm = self._MEMBER_VAR_RE.match(line)
+            if vm:
+                var_type = vm.group(1).strip()
+                var_name = vm.group(2)
+                if var_type in UE_MACROS or var_name in UE_MACROS:
+                    pending_ue_macro = None
+                    continue
+                # Skip lines that look like access specifiers or labels
+                if var_type in ("public", "protected", "private"):
+                    continue
+                sig = stripped.rstrip(";").strip()
+                result.symbols.append(ParsedSymbol(
+                    name=var_name,
+                    kind="variable",
+                    line_start=line_idx + 1,
+                    line_end=line_idx + 1,
+                    signature=sig,
+                    access=current_access,
+                    is_ue_macro=pending_ue_macro is not None,
+                    parent_class=parent_class,
+                ))
+                pending_ue_macro = None
+                continue
+
+            pending_ue_macro = None
 
     # ------------------------------------------------------------------
     # Misparsed class (tree-sitter sees it as function_definition)
