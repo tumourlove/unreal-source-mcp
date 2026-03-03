@@ -7,6 +7,7 @@
 An MCP (Model Context Protocol) server that indexes all UE C++ and HLSL source code into a SQLite database, providing structural queries (class hierarchy, call graphs, cross-references) and full-text search across the entire engine codebase.
 
 **Complements** (does not replace):
+- `unreal-config-mcp` — Config/INI intelligence (inheritance chains, settings search, diff from defaults, CVars)
 - `unreal-api-mcp` — API surface (signatures, includes, deprecation)
 - `Agent Integration Kit` — Editor control (Blueprints, assets, Python execution)
 
