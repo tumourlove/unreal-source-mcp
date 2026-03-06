@@ -26,7 +26,7 @@ Together these servers give AI agents full-stack UE understanding: engine intern
 ### Install from GitHub
 
 ```bash
-uvx --from git+https://github.com/tumourlove/unreal-source-mcp unreal-source-mcp --index
+uvx --from git+https://github.com/tumourlove/unreal-source-mcp.git unreal-source-mcp --index
 ```
 
 ### Claude Code Configuration
@@ -38,7 +38,7 @@ Add to your project's `.mcp.json`:
   "mcpServers": {
     "unreal-source": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/tumourlove/unreal-source-mcp", "unreal-source-mcp"],
+      "args": ["--from", "git+https://github.com/tumourlove/unreal-source-mcp.git", "unreal-source-mcp"],
       "env": {
         "UE_SOURCE_PATH": "C:/Path/To/UE_5.x/Engine/Source",
         "UE_SHADER_PATH": "C:/Path/To/UE_5.x/Engine/Shaders"
